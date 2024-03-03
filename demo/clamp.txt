@@ -1,0 +1,6 @@
+func clamp(n, min, max) {
+    return max<n && max || min>n && min || n
+}
+
+println("Below values should be 5, 10, 15:")
+println(clamp(0,5,15) $ ", " $ clamp(10,5,15) $ ", " $ clamp(20,5,15))

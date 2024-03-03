@@ -1,0 +1,15 @@
+functions = {
+    func(a, b) {
+        return a + b
+    },
+    func(a, b) {
+        return a - b
+    },
+    pow = func(a, b) {
+        return a**b
+    }
+}
+
+println(functions[1](10, 5)) ;  15
+println(functions[2](10, 5)) ;   5
+println(functions.pow(2, 8)) ; 256

@@ -1,0 +1,13 @@
+func PrintFib(n) { 
+ local prev, next = 0, 1
+ 
+ for i=1, i<n+1 {
+  local sum = prev + next
+  prev = next
+  next = sum
+
+  println(next)
+ }
+}
+
+PrintFib(10)
