@@ -71,6 +71,7 @@ namespace SWScript.compiler {
                 case '|': AddToken(punctuation_vertical_bar); break;
                 case '!': AddToken(punctuation_exclamation_mark); break;
                 case '$': AddToken(punctuation_dollar_sign); break;
+                case ':': AddToken(punctuation_colon); break;
                 case '.': AddToken(punctuation_period); break;
                 case ',': AddToken(punctuation_comma); break;
                 case '(': AddToken(punctuation_parenthesis_open); break;

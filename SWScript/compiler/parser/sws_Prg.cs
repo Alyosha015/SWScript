@@ -51,8 +51,6 @@ namespace SWScript.compiler {
             if (name != string.Empty) {
                 Frame.Closures.Add(name);
                 AddVariable(name, false, true);
-                sws_Variable closure = GetGlobal(name);
-                closure.ScopeStart = 0;
 
                 AddInstruction(op_closure, AddConst(name, sws_DataType.String));
                 AddVarSetInstruction(name);
@@ -78,19 +76,9 @@ namespace SWScript.compiler {
 
             Frame.Closures.Add(name);
             AddVariable(name, false, true);
-            sws_Variable closure = GetGlobal(name);
-            closure.ScopeStart = 0;
 
             AddInstruction(op_closure, AddConst(name, sws_DataType.String));
             AddVarSetInstruction(name);
-
-            //move instructions to start of program
-
-            for (int i = 0; i < 2; i++) {
-                sws_Op instruction = LastInstruction();
-                RemoveLastInstruction();
-                AddInstructionToStart(instruction.Opcode, instruction.Data);
-            }
 
             Frame = Frames[name];
 
@@ -104,8 +92,6 @@ namespace SWScript.compiler {
 
             Frame.Closures.Add(name);
             AddVariable(name, false, true);
-            sws_Variable closure = GetGlobal(name);
-            closure.ScopeStart = 0;
 
             AddInstruction(op_closure, AddConst(name, sws_DataType.String));
             AddVarSetInstruction(name);

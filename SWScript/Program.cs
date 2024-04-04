@@ -14,11 +14,11 @@ namespace SWScript {
     internal class Program {
         private static readonly string StartMessage = @"********************************************************
    _____      ______        _      __     ___ ___   ___
-  /###/#| /| /#/ __/_______(_)__  / /_   <  // _ \ / _ \
- _\#\ |#|/#|/#/\ \/ __/ __/ / _ \/ __/   / // // // // /
-/###/ |##/|##/___/\__/_/ /_/ .__/\__/   /_(_)___(_)___/
+  /###/#| /| /#/ __/_______(_)__  / /_   <  // _ \ <  /
+ _\#\ |#|/#|/#/\ \/ __/ __/ / _ \/ __/   / // // / / /
+/###/ |##/|##/___/\__/_/ /_/ .__/\__/   /_(_)___(_)_/
                           /_/
-Compiler & VM                                  v2024.3.2
+Compiler & VM                                v2024.04.03
 ********************************************************
 
 Type 'help' for a list of commands.";
@@ -34,7 +34,7 @@ sws <path> [-<options>]   - compiles program at <path> with options [-<options>]
    -bytecode -b           - prints bytecode of compiled program.
    -output -o             - prints bytecode as hex string.
    -export -e             - exports program to stormworks as a vehicle file.
-   -lbexport -lbe         - exports program as property sets for LifeBoatAPI.";
+   -lbexport -lbe         - exports program as property set commands for LifeBoatAPI.";
 
         static void Main(string[] args) {
             ANSIColor.EnableANSIInConsole();

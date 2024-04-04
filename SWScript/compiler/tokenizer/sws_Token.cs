@@ -102,6 +102,8 @@ namespace SWScript.compiler {
         punctuation_exclamation_mark,   // !
         punctuation_dollar_sign,        // $
 
+        punctuation_colon,              // :
+
         punctuation_period,             // .
         punctuation_comma,              // ,
         punctuation_parenthesis_open,   // (

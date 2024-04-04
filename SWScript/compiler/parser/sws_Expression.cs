@@ -8,7 +8,7 @@ using static SWScript.compiler.sws_TokenType;
 
 namespace SWScript.compiler {
     internal enum sws_ExpressionType {
-        Unary, Binary, Literal, Variable, Table, TableGet, LuaCall, ClosureCall, Closure
+        Unary, Binary, Literal, Variable, Table, TableGet, LuaCall, ClosureCall, Closure, SelfCall,
     }
 
     internal class sws_Expression {
@@ -63,6 +63,26 @@ namespace SWScript.compiler {
         /// Parent object of sws_Expression
         /// </summary>
         public sws_Expression Parent;
+
+        public sws_Expression() {
+
+        }
+
+        public sws_Expression(sws_Expression expr) {
+            Type = expr.Type;
+            Value = expr.Value;
+            ValueType = expr.ValueType;
+            Name = expr.Name;
+            LuaClosure = expr.LuaClosure;
+            Op = expr.Op;
+            Right = expr.Right;
+            Left = expr.Left;
+            ElementIndices = expr.ElementIndices;
+            Elements = expr.Elements;
+            Indices = expr.Indices;
+            Arguments = expr.Arguments;
+            Parent = expr.Parent;
+        }
 
         public sws_Expression Unary(sws_TokenType op, sws_Expression right) {
             right.Parent = this;
@@ -152,7 +172,13 @@ namespace SWScript.compiler {
             Type = sws_ExpressionType.Table;
 
             ElementIndices = elementIndices;
+            for (int i = 0; i < ElementIndices.Count; i++) {
+                ElementIndices[i].Parent = this;
+            }
             Elements = elements;
+            for (int i = 0; i < Elements.Count; i++) {
+                Elements[i].Parent = this;
+            }
 
             return this;
         }
@@ -167,8 +193,12 @@ namespace SWScript.compiler {
             }
 
             Right = table;
+            Right.Parent = this;
 
             Indices = indices;
+            for (int i = 0; i < Indices.Count; i++) {
+                Indices[i].Parent = this;
+            }
 
             return this;
         }
@@ -178,6 +208,9 @@ namespace SWScript.compiler {
 
             Name = name;
             Arguments = arguments;
+            for (int i = 0; i < Arguments.Count; i++) {
+                Arguments[i].Parent = this;
+            }
 
             return this;
         }
@@ -186,9 +219,12 @@ namespace SWScript.compiler {
             Type = sws_ExpressionType.ClosureCall;
 
             Left = left;
-            left.Parent = this;
+            Left.Parent = this;
 
             Arguments = arguments;
+            for (int i = 0; i < Arguments.Count; i++) {
+                Arguments[i].Parent = this;
+            }
 
             return this;
         }
@@ -198,6 +234,23 @@ namespace SWScript.compiler {
             
             Name = name;
             LuaClosure = luaClosure;
+
+            return this;
+        }
+
+        public sws_Expression SelfCall(sws_Expression left, sws_Expression name, List<sws_Expression> arguments) {
+            Type = sws_ExpressionType.SelfCall;
+
+            Right = name;
+            Right.Parent = this;
+
+            Left = left;
+            Left.Parent = this;
+
+            Arguments = arguments;
+            for (int i = 0; i < Arguments.Count; i++) {
+                Arguments[i].Parent = this;
+            }
 
             return this;
         }
@@ -587,6 +640,10 @@ namespace SWScript.compiler {
                         if (Arguments.Count == 0) {
                             str += ")";
                         }
+                        return str;
+                    }
+                case sws_ExpressionType.SelfCall: {
+                        string str = "N/A";
                         return str;
                     }
                 case sws_ExpressionType.Closure: {

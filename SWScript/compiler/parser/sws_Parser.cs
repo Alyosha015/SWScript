@@ -415,6 +415,17 @@ namespace SWScript.compiler {
                             return new sws_Statement(sws_StatementType.Call, null, ERROR, variables, local);
                         }
                     }
+
+                    //self function calls
+
+                    if (variables[0].Type == sws_ExpressionType.SelfCall) {
+                        if (generateBytecode) {
+                            ExprToBytecode(variables[0]);
+                            return null;
+                        } else {
+                            return null;
+                        }
+                    }
                 }
 
                 if (!Peek().IsAssignmentOperator()) {
@@ -914,6 +925,10 @@ namespace SWScript.compiler {
                             Prg.AddInstruction(op_call, expr.Arguments.Count * (callReturnValues ? 1 : -1));
                             break;
                         }
+                    case sws_ExpressionType.SelfCall: {
+                            throw new sws_Error(Peek(), "This type call is currently not implemented.");
+                            break;
+                        }
                     case sws_ExpressionType.Closure: {
                             if (expr.LuaClosure) {
                                 Prg.AddVarGetInstruction("lua " + expr.Name);
@@ -1228,10 +1243,11 @@ namespace SWScript.compiler {
 
                 //handle table get
                 void TableGet() {
-                    if (Peek().TokenType == punctuation_brackets_open || Peek().TokenType == punctuation_period) {
+                    if (Peek().TokenType == punctuation_brackets_open || Peek().TokenType == punctuation_period || Peek().TokenType == punctuation_colon) {
                         List<sws_Expression> indices = new List<sws_Expression>();
 
-                        //Parses both 'data["a"]["b"]' and 'data.a.b' syntax for reading table values.
+                        //Parses 'data["a"]["b"]' and 'data.a.b' syntax for reading table values.
+                        bool selfCall = Peek().TokenType == punctuation_colon;
                         Next();
 
                         if (Last().TokenType == punctuation_brackets_open) {
@@ -1245,20 +1261,30 @@ namespace SWScript.compiler {
                             Next();
                         }
 
-                        expr = new sws_Expression().TableGet(expr, indices);
+                        if (!selfCall) {
+                            expr = new sws_Expression().TableGet(expr, indices);
+                            if (Match(punctuation_brackets_open) || Match(punctuation_period)) {
+                                TableGet();
+                            } else if (Match(punctuation_parenthesis_open)) {
+                                Call();
+                            }
+                        } else {
+                            Consume(punctuation_parenthesis_open, $"Expected table value to be called when using ':' syntax.");
 
-                        if (Match(punctuation_brackets_open) || Match(punctuation_period)) {
-                            TableGet();
-                        } else if (Match(punctuation_parenthesis_open)) {
-                            Call();
+                            Call(expr, indices.Last());
                         }
                     }
                 }
 
-                void Call() {
+                void Call(sws_Expression arg=null, sws_Expression funcName=null) {
                     List<sws_Expression> args = ParseFuncArgs();
 
-                    expr = new sws_Expression().ClosureCall(expr, args);
+                    if (arg != null) {
+                        args.Insert(0, arg);
+                        expr = new sws_Expression().SelfCall(expr, funcName, args);
+                    } else {
+                        expr = new sws_Expression().ClosureCall(expr, args);
+                    }
 
                     //incase a call happens directly after a call (ex. 'test()()')
                     if (Array.IndexOf(new sws_TokenType[] { identifier, punctuation_brackets_closed, punctuation_parenthesis_closed }, Last().TokenType) != -1 && Match(punctuation_parenthesis_open)) {

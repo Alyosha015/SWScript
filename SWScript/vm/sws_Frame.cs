@@ -14,6 +14,7 @@ namespace SWScript.vm {
 
         public sws_Variable[] Locals;
 
+        public sws_Variable[] Upvalues;
         public string[] UpvalueFrames;
         public int[] UpvalueIndexes;
         public Dictionary<string, int> UpvalueCSIndexes;
@@ -24,10 +25,12 @@ namespace SWScript.vm {
             UpvalueCSIndexes = new Dictionary<string, int>();
         }
 
-        public sws_Frame(string name, int[] program, sws_Variable[] locals, string[] upvalueFrames, int[] upvalueIndexes) {
+        public sws_Frame(string name, int[] program, sws_Variable[] locals, sws_Variable[] upvalues, string[] upvalueFrames, int[] upvalueIndexes) {
             Name = name;
             Program = program;
             Locals = locals;
+
+            Upvalues = upvalues;
             UpvalueFrames = upvalueFrames;
             UpvalueIndexes = upvalueIndexes;
 
@@ -43,6 +46,11 @@ namespace SWScript.vm {
             Locals = new sws_Variable[frame.Locals.Length];
             for (int i = 0; i < frame.Locals.Length; i++) {
                 Locals[i] = frame.Locals[i].Clone();
+            }
+
+            Upvalues = new sws_Variable[frame.Upvalues.Length];
+            for (int i = 0; i < frame.Upvalues.Length; i++) {
+                Upvalues[i] = frame.Upvalues[i].Clone();
             }
 
             UpvalueFrames = frame.UpvalueFrames;

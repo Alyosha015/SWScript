@@ -98,8 +98,13 @@ namespace SWScript.vm {
                     frameReferences[j] = Next();
                     indexReferences[j] = NextInt();
                 }
+                
+                sws_Variable[] upvalues = new sws_Variable[upvalueCount];
+                for (int j = 0; j < upvalues.Length; j++) {
+                    upvalues[j] = VAR_NULL;
+                }
 
-                sws_Frame frame = new sws_Frame(name, program, locals, frameReferences, indexReferences);
+                sws_Frame frame = new sws_Frame(name, program, locals, upvalues, frameReferences, indexReferences);
                 Frames.Add(name, frame);
             }
 
@@ -117,7 +122,7 @@ namespace SWScript.vm {
                 string data = Next();
                 int type = NextInt();
 
-                //(only doubles and strings can be stored in constants)
+                //(only doubles and strings are stored in constants)
                 object value = data;
 
                 if (type == TYPE_DOUBLE) {
@@ -150,16 +155,15 @@ namespace SWScript.vm {
 
                 while (true) {
                     //set where to begin execution
-                    if (!start) {
+                    if (!start) { //runs main
+                        CSP = 1;
                         start = true;
                     } else if (hasOnTickFunc && (last != "onTick" || !hasOnDrawFunc)) {
                         name = "onTick";
                     } else if (hasOnDrawFunc && (last != "onDraw" || !hasOnTickFunc)) {
                         name = "onDraw";
-                    } else {
-                        //in case there are no onTick/onDraw functions, run main every tick.
-                        name = string.Empty;
                     }
+
                     //load stack frame
                     Frame.Copy(Frames[name]);
 
@@ -171,6 +175,9 @@ namespace SWScript.vm {
                                 Frame.UpvalueCSIndexes.Add(CallStack[0].Name, 0);
                             }
                         }
+                    } else {
+                        //runs once, when n=""
+                        CallStack[0].Copy(Frame);
                     }
 
                     bool halt = false;
@@ -198,7 +205,11 @@ namespace SWScript.vm {
                                     break;
                                 }
                             case (int)op_getupval: {
-                                    Push(CallStack[Frame.UpvalueCSIndexes[Frame.UpvalueFrames[data]]].Locals[Frame.UpvalueIndexes[data]]);
+                                    if (Frame.UpvalueCSIndexes.ContainsKey(Frame.UpvalueFrames[data])) {
+                                        Push(CallStack[Frame.UpvalueCSIndexes[Frame.UpvalueFrames[data]]].Locals[Frame.UpvalueIndexes[data]]);
+                                    } else {
+                                        Push(Frame.Upvalues[data]);
+                                    }
                                     break;
                                 }
                             case (int)op_getglobal: {
@@ -210,7 +221,11 @@ namespace SWScript.vm {
                                     break;
                                 }
                             case (int)op_setupval: {
-                                    CallStack[Frame.UpvalueCSIndexes[Frame.UpvalueFrames[data]]].Locals[Frame.UpvalueIndexes[data]] = Pop();
+                                    if (Frame.UpvalueCSIndexes.ContainsKey(Frame.UpvalueFrames[data])) {
+                                        CallStack[Frame.UpvalueCSIndexes[Frame.UpvalueFrames[data]]].Locals[Frame.UpvalueIndexes[data]] = Pop();
+                                    } else {
+                                        Frame.Upvalues[data] = Pop();
+                                    }
                                     break;
                                 }
                             case (int)op_setglobal: {
@@ -803,6 +818,20 @@ namespace SWScript.vm {
 
                                     if (!closure.LuaCall) {
                                         closure.Copy(Frames[closureName]);
+
+                                        if (closure.UpvalueIndexes.Length > 0) {
+                                            CallStack[CSP].Copy(Frame);
+
+                                            for (int i = CSP; i >= 0; i--) {
+                                                if (Array.IndexOf(closure.UpvalueFrames, CallStack[i].Name) != -1) {
+                                                    for (int j = 0; j < closure.UpvalueFrames.Length; j++) {
+                                                        if (closure.UpvalueFrames[j] == CallStack[i].Name) {
+                                                            closure.Upvalues[j] = CallStack[i].Locals[closure.UpvalueIndexes[j]].Clone();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
 
                                     Push(new sws_Variable(closure, TYPE_CLOSURE));
@@ -899,15 +928,11 @@ namespace SWScript.vm {
                     }
 
                     //stop executing
-                    if (!hasOnTickFunc && !hasOnDrawFunc) {
-                        return;
-                    } else {
-                        //add 'main' function to callstack, needed so that upvalues from it work.
-                        if (name == string.Empty) {
-                            CallStack[0].Copy(Frame);
-                        }
-                        //next function to run is going to be onTick or onDraw, this mimics them being pushed onto the stack
+                    if (hasOnTickFunc || hasOnDrawFunc) {
+                        //next function to run is going to be onTick or onDraw, this accounts for them being pushed onto the stack
                         CSP = 2;
+                    } else {
+                        return;
                     }
 
                     last = name;
