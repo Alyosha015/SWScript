@@ -14,7 +14,7 @@ ot=N~=Frms[k]od=N~=Frms[d]
 function TC(T,V)for k,v in pairs(T)do if v==V then return t end end return f end
 function Cy(a)local _={a[1],a[2],{},a[4],a[5],a[6],a[7],a[8],{},a[10]}for i=0,#a[3]do _[3][i]=a[3][i]end for i=0,#a[9]do _[9][i]=a[9][i]end return _ end
 function Ex(otc)h=f
-if not st then cs=1 st=t elseif otc and ot then n=k elseif not otc and od then n=d else return end
+if not st then st=t elseif otc and ot then n=k elseif not otc and od then n=d else return end
 F=Cy(Frms[n])if n~=""then CS[1]=Cy(F)if TC(F[4],CS[0][1])then F[8][CS[0][1]]=0 end else CS[0]=Cy(F)end
 while true do
 local P=1+F[7]i=F[2][P-1]local I,D,E,NN,a,b,c=i>>18,i&131071,0,t,0,0,0
@@ -76,6 +76,6 @@ if I<18 or(I>30 and I<45)then S[sp]=c sp=sp+1 end
 F[7]=P
 if h then break end
 end
-if ot or od then cs=2 else return end end
+if ot or od then cs=2 if n==""then CS[0]=Cy(F)end else return end end
 function onTick()Ex(t)end
 function onDraw()Ex(f)end

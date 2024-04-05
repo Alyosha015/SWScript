@@ -929,6 +929,10 @@ namespace SWScript.vm {
 
                     //stop executing
                     if (hasOnTickFunc || hasOnDrawFunc) {
+                        if (name == string.Empty) {
+                            CallStack[0].Copy(Frame);
+                        }
+
                         //next function to run is going to be onTick or onDraw, this accounts for them being pushed onto the stack
                         CSP = 2;
                     } else {
@@ -1002,7 +1006,7 @@ namespace SWScript.vm {
                 case TYPE_DOUBLE: return "double";
                 case TYPE_STRING: return "string";
                 case TYPE_TABLE: return "table";
-                case TYPE_CLOSURE: return "closure";
+                case TYPE_CLOSURE: return "table"; //done to be identical to Lua VM version
                 default: throw new sws_VMError($"Unknown variable type ({type}).", Prg, Frame.Name, Frame.PC - 1);
             }
         }
