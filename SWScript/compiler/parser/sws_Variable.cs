@@ -1,11 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace SWScript.compiler {
-    internal enum sws_DataType {
+namespace SWS.Compiler {
+    public enum sws_DataType {
         Null,
         Bool,
         Double,
@@ -14,14 +15,14 @@ namespace SWScript.compiler {
         Function,
     }
 
-    internal enum sws_VariableType {
+    public enum sws_VariableType {
         Constant,
         Local,
         Upvalue,
         Global,
     }
 
-    internal class sws_Variable {
+    public class sws_Variable {
         public string Name;
         public sws_VariableType VariableType;
         /// <summary>
@@ -99,6 +100,77 @@ namespace SWScript.compiler {
             Index = index;
 
             return this;
+        }
+
+        public string TableToStr() {
+            StringBuilder output = new StringBuilder();
+
+            output.Append("{");
+
+            sws_Table table = (sws_Table)Value;
+
+            sws_Variable[] keys = table.Table.Keys.ToArray();
+
+            for (int j = 0; j < keys.Length; j++) {
+                sws_Variable key = keys[j];
+                sws_Variable value = table.Table[key];
+
+                if (value.ValueType == sws_DataType.Table) {
+                    throw new sws_ParserError("Attempted to encode nested table. (Compiler bug)");
+                }
+
+                output.Append(key.Value.ToString() ?? "null");
+                output.Append('=');
+                output.Append(value.Value.ToString() ?? "null");
+                if (j + 1 < keys.Length) {
+                    output.Append(", ");
+
+                }
+            }
+            
+            output.Append("}");
+            return output.ToString();
+        }
+
+        /// <summary>
+        /// Converts value to string. Used for constant variable type.
+        /// </summary>
+        /// <returns></returns>
+        public string ToConstString(char M1) {
+            StringBuilder output = new StringBuilder();
+            output.Append((int)ValueType);
+            output.Append(M1);
+
+            switch (ValueType) {
+                case sws_DataType.Null: output.Append(" " + M1); break;
+                case sws_DataType.Bool: output.Append((bool)Value ? "SWS" + M1 : " " + M1); break;
+                case sws_DataType.Double: output.Append(Value.ToString() + M1); break;
+                case sws_DataType.String: output.Append(Value.ToString() + M1); break;
+                case sws_DataType.Table: {
+                        sws_Table table = (sws_Table)Value;
+
+                        sws_Variable[] keys = table.Table.Keys.ToArray();
+
+                        output.Append(keys.Length.ToString());
+                        output.Append(M1);
+
+                        foreach (sws_Variable key in keys) {
+                            sws_Variable value = table.Table[key];
+
+                            if (value.ValueType == sws_DataType.Table) {
+                                throw new sws_ParserError("Attempted to encode nested table. (Compiler bug)");
+                            }
+
+                            output.Append(key.ToConstString(M1));
+                            output.Append(value.ToConstString(M1));
+                        }
+
+                        break;
+                    }
+                default: throw new sws_ParserError($"Attempted to encode const type '{ValueType}' to string. (Compiler bug)");
+            }
+
+            return output.ToString();
         }
     }
 }

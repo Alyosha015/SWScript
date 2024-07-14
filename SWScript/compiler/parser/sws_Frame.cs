@@ -4,8 +4,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace SWScript.compiler {
-    internal class sws_Frame {
+namespace SWS.Compiler {
+    public class sws_Frame {
         public string Name;
 
         public List<sws_Op> Program;

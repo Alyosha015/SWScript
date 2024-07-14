@@ -4,94 +4,168 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-using static SWScript.compiler.sws_Compiler;
-using static SWScript.compiler.sws_TokenType;
-using static SWScript.compiler.sws_Opcode;
+using static SWS.Compiler.sws_Common;
 
-namespace SWScript.compiler {
+using static SWS.Compiler.sws_TokenType;
+using static SWS.Compiler.sws_Opcode;
+
+namespace SWS.Compiler {
     internal class sws_Parser {
+        private SWScript _sws;
+        private string _source;
+        private string[] _sourceLines;
+        private List<sws_Token> _tokens;
+
         /// <summary>
         /// Used as part of error handling, stores last token access with Next() / Peek() / etc.
         /// </summary>
-        public static sws_Token LastToken;
+        private sws_Token _lastToken;
 
         /// <summary>
-        /// "Depth" of scope parser is currently in.
+        /// "_depth" of scope parser is currently in.
         /// </summary>
-        public static int Depth;
+        private int _depth;
 
         /// <summary>
         /// Index of current token being read by parser.
         /// </summary>
-        private static int current;
+        private int _current;
 
         /// <summary>
         /// Used to keep track of index of break and continue statement jump instructions at each depth.
         /// </summary>
-        private static Stack<List<int>> continueBreakJumpLocations;
+        private Stack<List<int>> _continueBreakJumpLocations;
 
-        private static Stack<List<int>> ifEndJumpLocations;
+        private Stack<List<int>> _ifEndJumpLocations;
 
-        public static void Parse() {
-            current = 0;
-            Depth = 0;
+        private int _switchStatementIDCounter;
 
-            continueBreakJumpLocations = new Stack<List<int>>();
-            ifEndJumpLocations = new Stack<List<int>>();
+        #region Variables used to store compiled program
 
-            Prg = new sws_Prg(SourceLines);
+        private Dictionary<string, sws_Frame> _frames;
 
-            Prg.PushFrame(string.Empty);
+        private Stack<sws_Frame> _frameStack;
+
+        private sws_Frame _frame;
+
+        /// <summary>
+        /// Used to name functions with no name (ex. 'local testfunc = func() {}'. Because you can't have a function with an integer as a name it should be fine.
+        /// </summary>
+        private int _unnammedFuncCount = 0;
+
+        //globals and constants are shared between all frames. Due to bytecode format they are both limited to 2^17 (131072) each.
+        private List<sws_Variable> _globals;
+        private List<sws_Variable> _constants;
+
+        #region Property Sets
+
+        private Dictionary<string, string> _propertyTexts;
+        private Dictionary<string, double> _propertyNumbers;
+        private Dictionary<string, bool> _propertyBools;
+
+        #endregion
+        #endregion
+
+        public sws_Program Parse(SWScript sws, string source, string[] sourceLines, List<sws_Token> tokens) {
+            _sws = sws;
+            _source = source;
+            _sourceLines = sourceLines;
+            _tokens = tokens;
+
+            _current = 0;
+            _depth = 0;
+
+            _continueBreakJumpLocations = new Stack<List<int>>();
+            _ifEndJumpLocations = new Stack<List<int>>();
+
+            _frames = new Dictionary<string, sws_Frame>();
+            _frameStack = new Stack<sws_Frame>();
+            _globals = new List<sws_Variable>();
+            _constants = new List<sws_Variable>();
+
+            _propertyTexts = new Dictionary<string, string>();
+            _propertyNumbers = new Dictionary<string, double>();
+            _propertyBools = new Dictionary<string, bool>();
+
+            _lastToken = sws_Token.Error();
+
+            PushFrame(string.Empty, true);
 
             while (!AtEnd()) {
                 try {
                     ParserMain();
-                } catch (sws_Error) {
-                    Synchronize();
+                } catch (sws_ParserError e) {
+                    if (e.Token == null) {
+                        e.Token = _lastToken;
+                    }
+
+                    int line = e.Token.NLine, col = e.Token.NColumn;
+
+                    if(line == -1) {
+                        line = sourceLines.Length;
+                    }
+
+                    if(col == -1) {
+                        col = 0;
+                    }
+
+                    _sws.MessageAction(MsgType.ErrCompile, line, col, sourceLines[line - 1], e.ErrMessage);
+                    return null;
                 }
             }
 
-            Prg.Frames[string.Empty].
-                Program.Add(new sws_Op(op_halt, int.MinValue));
+            _frames[string.Empty].Program.Add(new sws_Op(op_halt, int.MinValue, _lastToken.NLine));
 
-            Prg.SetLocalScopeEnd();
+            SetLocalScopeEnd();
 
-            Prg.Export();
-            
-            Prg.Compiled = true;
+            return new sws_Program(_source, _sourceLines, _tokens, _frames, _globals, _constants, _propertyTexts, _propertyNumbers, _propertyBools);
+        }
+
+        private void HandleWarning(sws_Warning warning) {
+            if (warning.Token == null) {
+                warning.Token = _lastToken;
+            }
+
+            _sws.MessageAction(MsgType.Warning, warning.Token.NLine, warning.Token.NColumn, _sourceLines[warning.Token.NLine - 1], warning.ErrMessage);
         }
 
         //parser functions start here
 
-        private static void ParserMain() {
+        private void ParserMain() {
             if (Match(keyword_func)) {
                 ParseFunction();
             } else if (Match(keyword_if)) {
                 IfStatement();
             } else if (Match(keyword_for)) {
-                Depth++;
-                continueBreakJumpLocations.Push(new List<int>());
+                _depth++;
+                _continueBreakJumpLocations.Push(new List<int>());
                 ForStatement();
-                continueBreakJumpLocations.Pop();
-                Depth--;
+                _continueBreakJumpLocations.Pop();
+                _depth--;
             } else if (Match(keyword_while)) {
-                Depth++;
-                continueBreakJumpLocations.Push(new List<int>());
+                _depth++;
+                _continueBreakJumpLocations.Push(new List<int>());
                 WhileStatement();
-                continueBreakJumpLocations.Pop();
-                Depth--;
+                _continueBreakJumpLocations.Pop();
+                _depth--;
             } else if (Match(keyword_continue)) {
-                Prg.AddInstruction(op_jmp, JMP_CONTINUE);
-                continueBreakJumpLocations.Peek().Add(Prg.GetPC());
+                AddInstruction(op_jmp, JMP_CONTINUE);
+                _continueBreakJumpLocations.Peek().Add(GetPC());
             } else if (Match(keyword_break)) {
-                Prg.AddInstruction(op_jmp, JMP_BREAK);
-                continueBreakJumpLocations.Peek().Add(Prg.GetPC());
+                AddInstruction(op_jmp, JMP_BREAK);
+                _continueBreakJumpLocations.Peek().Add(GetPC());
+            } else if (Match(keyword_intswitch)) {
+                IntSwitchStatement();
+            } else if (Match(keyword_switch)) {
+                SwitchStatement();
             } else if (Match(keyword_return)) {
                 ReturnStatement();
             } else if (Peek().TokenType == keyword_print || Peek().TokenType == keyword_println) {
                 bool println = Peek().TokenType == keyword_println;
                 Next();
                 PrintStatement(println);
+            } else if (Match(keyword_property)) {
+                SetPropertyStatement();
             } else if ((Peek().TokenType == identifier && Peek2().TokenType != punctuation_parenthesis_open) || Peek().TokenType == keyword_local) {
                 sws_Statement statement = ExpressionStatement(true);
                 if (statement != null) {
@@ -99,29 +173,36 @@ namespace SWScript.compiler {
                 }
             } else if (Peek().TokenType == identifier || Peek().TokenType == keyword_lua) { //most function calls generated here
                 ExprToBytecode(Expression(), true, false);
+            } else if (Match(punctuation_braces_open)) {
+                _depth++;
+
+                Body();
+
+                SetLocalScopeEnd();
+                _depth--;
             } else {
-                throw new sws_Error(Peek(), $"Unexpected token '{Peek().TokenType}'");
+                throw new sws_ParserError(Peek(), $"Unexpected token '{Peek().TokenType}'");
             }
         }
 
-        private static void ParseFunction(bool expectNoName = false) {
+        private void ParseFunction(bool expectNoName = false) {
             if (expectNoName && Peek().TokenType != punctuation_parenthesis_open) {
                 if(Peek().TokenType == identifier) {
-                    throw new sws_Error(Peek(), "A function in an expression can't have a name. Expected 'func()'.");
+                    throw new sws_ParserError(Peek(), "A function in an expression can't have a name. Expected 'func()'.");
                 } else {
-                    throw new sws_Error(Peek(), "Expected '('.");
+                    throw new sws_ParserError(Peek(), "Expected '('.");
                 }
             }
 
             //parse function name and push new frame for function
             if (Peek().TokenType != punctuation_parenthesis_open) {
                 Consume(identifier, "Expected function name.");
-                Prg.PushFrame(Last().Literal.ToString());
+                PushFrame(Last().Literal.ToString(), _depth < 1);
             } else {
-                Prg.PushNoName();
+                PushNoName();
             }
 
-            Depth++;
+            _depth++;
 
             //parse function arguments.
             Consume(punctuation_parenthesis_open, "Expected '('.");
@@ -134,7 +215,7 @@ namespace SWScript.compiler {
                     Consume(punctuation_comma, "Expected ',' between function parameters.");
 
                     if (Peek().TokenType == punctuation_parenthesis_closed) {
-                        throw new sws_Error(Peek(), "Expected function parameter after ','.");
+                        throw new sws_ParserError(Peek(), "Expected function parameter after ','.");
                     }
                 }
             }
@@ -142,103 +223,103 @@ namespace SWScript.compiler {
             Consume(punctuation_parenthesis_closed, "Expected ')'.");
 
             for (int i = 0; i < parameters.Count; i++) {
-                Prg.AddLocal(parameters[i]);
+                AddVariable(parameters[i], sws_VariableType.Local);
             }
 
             //parse function body
             Consume(punctuation_braces_open, "Expected '{' to begin function body.");
-            Prg.SetLocalScopeStart();
+            SetLocalScopeStart();
 
             while (!AtEnd() && (Peek().TokenType != punctuation_braces_closed)) {
                 ParserMain();
             }
 
-            Prg.SetLocalScopeEnd();
+            SetLocalScopeEnd();
             Consume(punctuation_braces_closed, "Expected '}' to end function body.");
 
             //adds return statement if there's none
-            if (Prg.Frame.Program.Count == 0 || Prg.Frame.Program.Last().Opcode != op_return) {
-                Prg.AddInstruction(op_return, 0);
+            if (_frame.Program.Count == 0 || _frame.Program.Last().Opcode != op_return) {
+                AddInstruction(op_return, 0);
             }
 
-            Prg.PopFrame();
+            PopFrame();
 
-            Depth--;
+            _depth--;
         }
 
-        private static void IfStatement() {
+        private void IfStatement() {
             int pc;
-            ifEndJumpLocations.Push(new List<int>());
+            _ifEndJumpLocations.Push(new List<int>());
 
             sws_Expression condition = Expression();
             List<int> jumpsToResolve = ExprToBytecode(condition, true, true, true);
-            Depth++;
+            _depth++;
 
-            Prg.AddJumpFInstruction(JMP_IFEND);
-            pc = Prg.GetPC();
+            AddJumpFInstruction(JMP_IFEND);
+            pc = GetPC();
 
             Consume(punctuation_braces_open, "Expected '{'.");
 
             Body();
-            Prg.SetLocalScopeEnd();
+            SetLocalScopeEnd();
 
             //jumps to end of if-else if-else chain, only add if it's not the last
             if (Peek().TokenType == keyword_else_if || Peek().TokenType == keyword_else) {
-                Prg.AddInstruction(op_jmp, JMP_IFEND);
-                ifEndJumpLocations.Peek().Add(Prg.GetPC());
+                AddInstruction(op_jmp, JMP_IFEND);
+                _ifEndJumpLocations.Peek().Add(GetPC());
             }
 
-            Prg.ResolveJumpPC(pc);
-            Prg.ResolveJumpPCs(jumpsToResolve);
+            ResolveJumpPC(pc);
+            ResolveJumpPCs(jumpsToResolve);
 
-            Depth--;
+            _depth--;
 
             while(Match(keyword_else_if)) {
                 sws_Expression ifElseCondition = Expression();
                 jumpsToResolve = ExprToBytecode(ifElseCondition, true, true, true);
 
-                Depth++;
+                _depth++;
 
-                Prg.AddJumpFInstruction(JMP_IFEND);
-                pc = Prg.GetPC();
+                AddJumpFInstruction(JMP_IFEND);
+                pc = GetPC();
 
                 Consume(punctuation_braces_open, "Expected '{'.");
 
                 Body();
-                Prg.SetLocalScopeEnd();
+                SetLocalScopeEnd();
 
                 //jumps to end of if-else if-else chain, only add if it's not the last
                 if(Peek().TokenType == keyword_else_if || Peek().TokenType == keyword_else) {
-                    Prg.AddInstruction(op_jmp, JMP_IFEND);
-                    ifEndJumpLocations.Peek().Add(Prg.GetPC());
+                    AddInstruction(op_jmp, JMP_IFEND);
+                    _ifEndJumpLocations.Peek().Add(GetPC());
                 }
 
-                Prg.ResolveJumpPC(pc);
-                Prg.ResolveJumpPCs(jumpsToResolve);
+                ResolveJumpPC(pc);
+                ResolveJumpPCs(jumpsToResolve);
 
-                Depth--;
+                _depth--;
             }
 
             if (Match(keyword_else)) {
                 Consume(punctuation_braces_open, "Expected '{'.");
 
-                Depth++;
+                _depth++;
 
                 Body();
-                Prg.SetLocalScopeEnd();
+                SetLocalScopeEnd();
 
-                Depth--;
+                _depth--;
             }
 
-            Prg.ResolveIfEnd(ifEndJumpLocations.Peek(), Prg.GetPC());
+            ResolveIfEnd(_ifEndJumpLocations.Peek(), GetPC());
 
-            ifEndJumpLocations.Pop();
+            _ifEndJumpLocations.Pop();
         }
 
         /// <summary>
         /// Parses for statement. A for can be formated two ways: 'for a, b {}' and 'for a, b, c {}'. a and b are identical for both, with a creating the iterator variable (<name>=<expression>), and b being the condition expression for the loop. In the second type, however, c is an expression which executes at the end of each loop. If c is not present the variable in a is declared instead.
         /// </summary>
-        private static void ForStatement() {
+        private void ForStatement() {
             //a
             Consume(identifier, "Expected identifer for iterator variable's name.");
 
@@ -248,10 +329,10 @@ namespace SWScript.compiler {
             
             sws_Expression iteratorInitializer = Expression();
 
-            Prg.AddVariable(iterator, true);
+            AddVariable(iterator, sws_VariableType.Local);
             ExprToBytecode(iteratorInitializer);
-            Prg.SetLocalScopeStart();
-            Prg.AddVarSetInstruction(iterator);
+            SetLocalScopeStart();
+            AddVarSetInstruction(iterator);
 
             //b
 
@@ -260,7 +341,6 @@ namespace SWScript.compiler {
             sws_Expression condition = Expression();
 
             //c
-            //uses parser for statement
             bool hasCTerm = false;
             sws_Statement statement = null;
             
@@ -276,61 +356,276 @@ namespace SWScript.compiler {
             Consume(punctuation_braces_open, "Expected '{'.");
 
             //condition. Runs before loop body.
-            int conditionStartPc = Prg.GetPC();
+            int conditionStartPc = GetPC();
             List<int> jumpsToResolve = ExprToBytecode(condition, true, true, true);
-            Prg.AddJumpFInstruction(JMP_CONDITION);
-            int jfpc = Prg.GetPC();
+            AddJumpFInstruction(JMP_CONDITION);
+            int jfpc = GetPC();
 
             Body();
 
             //logic for incrementing and looping back to checking condition
-            int incrementStartPC = Prg.GetPC();
+            int incrementStartPC = GetPC();
 
             if (!hasCTerm) {
-                Prg.AddVarGetInstruction(iterator);
-                Prg.AddInstruction(op_addimm, 1);
-                Prg.AddVarSetInstruction(iterator);
+                AddVarGetInstruction(iterator);
+                AddInstruction(op_addimm, 1);
+                AddVarSetInstruction(iterator);
             } else {
                 StatementToBytecode(statement);
             }
 
-            Prg.AddInstruction(op_jmp, conditionStartPc - Prg.GetPC() - 1);
+            AddInstruction(op_jmp, conditionStartPc - GetPC() - 1);
 
             //
 
-            Prg.ResolveJumpPC(jfpc);
-            Prg.ResolveJumpPCs(jumpsToResolve);
+            ResolveJumpPC(jfpc);
+            ResolveJumpPCs(jumpsToResolve);
 
-            Prg.ResolveContinueBreakLoop(continueBreakJumpLocations.Peek(), incrementStartPC, Prg.GetPC());
+            ResolveContinueBreakLoop(_continueBreakJumpLocations.Peek(), incrementStartPC, GetPC());
 
-            Prg.SetLocalScopeEnd();
+            SetLocalScopeEnd();
         }
 
-        private static void WhileStatement() {
+        private void WhileStatement() {
             sws_Expression condition = Expression();
 
             Consume(punctuation_braces_open, "Expected '{'.");
 
-            int conditionStartPc = Prg.GetPC();
+            int conditionStartPc = GetPC();
             List<int> jumpsToResolve = ExprToBytecode(condition, true, true, true);
-            Prg.AddJumpFInstruction(JMP_CONDITION);
-            int jfpc = Prg.GetPC();
+            AddJumpFInstruction(JMP_CONDITION);
+            int jfpc = GetPC();
 
             Body();
 
-            Prg.AddInstruction(op_jmp, conditionStartPc - Prg.GetPC() - 1);
+            AddInstruction(op_jmp, conditionStartPc - GetPC() - 1);
 
             //
 
-            Prg.ResolveJumpPC(jfpc);
-            Prg.ResolveJumpPCs(jumpsToResolve);
+            ResolveJumpPC(jfpc);
+            ResolveJumpPCs(jumpsToResolve);
 
-            Prg.ResolveContinueBreakLoop(continueBreakJumpLocations.Peek(), conditionStartPc, Prg.GetPC());
+            ResolveContinueBreakLoop(_continueBreakJumpLocations.Peek(), conditionStartPc, GetPC());
 
-            Prg.SetLocalScopeEnd();
+            SetLocalScopeEnd();
         }
 
-        private static void ReturnStatement() {
+        private void IntSwitchStatement() {
+            HandleWarning(new sws_Warning(Peek(), "switch is recommended over intswitch, it's faster and isn't limited to numbers."));
+
+            sws_Expression expr = Expression();
+            
+            Consume(punctuation_braces_open, "Expected '{' after intswitch expression.");
+
+            string tempVarName = $"sws_intswitch_temp {_switchStatementIDCounter++}";
+
+            // * * * * Bounds Check * * * *
+            AddVariable(tempVarName, sws_VariableType.Global);
+
+            int loadMaxPC = AddInstruction(op_loadimm);
+
+            ExprToBytecode(expr);
+            AddInstruction(op_dup); //used for upper bound check
+            AddVarSetInstruction(tempVarName);
+
+            //upper bound check
+            int maxBoundJumpPC = AddInstruction(op_jgt); //jumps to default block
+
+            //lower bound check
+            AddVarGetInstruction(tempVarName);
+            AddInstruction(op_dup);
+            int loadMinPC = AddInstruction(op_loadimm);
+            int minBoundJumpPC = AddInstruction(op_jgt); //jumps to default block
+            // * * * * * * * *
+
+            int indexedJumpPC = AddInstruction(op_jindexed);
+
+            Dictionary<int, int> caseBodyPCs = new Dictionary<int, int>();
+            List<int> caseExitPCs = new List<int>();
+            int min = int.MaxValue;
+            int max = int.MinValue;
+
+            //parse case statements
+            while(Match(keyword_case)) {
+                _depth++;
+
+                sws_Expression @case = Expression();
+                @case.ConstantFold();
+
+                if(@case.Type != sws_ExpressionType.Literal) {
+                    throw new sws_ParserError(Peek(), $"Expected case expression to be literal. Current type: '{@case.Type}'.");
+                }
+
+                if(@case.ValueType != sws_DataType.Double) {
+                    throw new sws_ParserError(Peek(), $"Expected case expression to be number. Current type: '{@case.ValueType}'.");
+                }
+
+                double value = (double)@case.Value;
+                if(value % 1 != 0 && value < 0) {
+                    throw new sws_ParserError(Peek(), $"intswitch case must be integer and positive, instead got '{value}'.");
+                }
+
+                if(value < min) {
+                    min = (int)value;
+                }
+
+                if(value > max) {
+                    max = (int)value;
+                }
+
+                Consume(punctuation_braces_open, "Expected '{' after case expression.");
+
+                caseBodyPCs.Add((int)value, GetPC() + 1);
+
+                Body();
+
+                caseExitPCs.Add(AddInstruction(op_jmp));
+                
+                SetLocalScopeEnd();
+                _depth--;
+            }
+
+            _frame.Program[indexedJumpPC].Data = -min;
+            _frame.Program[loadMinPC].Data = min;
+            _frame.Program[loadMaxPC].Data = max;
+
+            int range = max - min;
+            if(range > 256) {
+                HandleWarning(new sws_Warning(Peek(), $"intswitch has very large range ({range}). This may lead to large program size."));
+            }
+
+            //create jump table
+            List<int> jumpsToDefaultBlock = new List<int>();
+            List<int> jumpsToCaseBlock = new List<int>();
+
+            for (int i = min; i < max + 1; i++) {
+                InsertInstruction(indexedJumpPC + i - min + 1, op_jmp);
+                if (!caseBodyPCs.ContainsKey(i)) {
+                    jumpsToDefaultBlock.Add(indexedJumpPC + i - min + 1);
+                } else {
+                    jumpsToCaseBlock.Add(indexedJumpPC + i - min + 1);
+                }
+            }
+
+            //resolve jumps to case blocks
+            List<int> cases = caseBodyPCs.Values.ToList();
+            for (int i = 0; i < cases.Count; i++) {
+                ResolveJumpPcCustomDest(jumpsToCaseBlock[i], cases[i] + range);
+            }
+
+            // * * * * Default Statement * * * *
+
+            Consume(keyword_default, "Expected 'default' statement.");
+            Consume(punctuation_braces_open, "Expected '{' after 'default'.");
+
+            //resolve jumps to default block
+            ResolveJumpPC(maxBoundJumpPC);
+            ResolveJumpPC(minBoundJumpPC);
+            ResolveJumpPCs(jumpsToDefaultBlock);
+
+            _depth++;
+
+            Body();
+
+            SetLocalScopeEnd();
+            _depth--;
+
+            // * * * * * * * *
+
+            ResolveJumpPCs(caseExitPCs, range + 1);
+
+            //if this ever happens I'll be impressed.
+            if (GetPC() - indexedJumpPC > 131071) {
+                throw new sws_ParserError(_lastToken, $"intswitch statement size too large.");
+            }
+
+            Consume(punctuation_braces_closed, "Expected '}' to end intswitch statement.");
+        }
+
+        private void SwitchStatement() {
+            List<sws_Expression> map = new List<sws_Expression>(); //stores literals used in case <expr>
+
+            sws_Expression expr = Expression();
+
+            Consume(punctuation_braces_open, "Expected '{' after switch expression.");
+
+            int mapGetPC = AddInstruction(op_getconst);
+            ExprToBytecode(expr);
+            AddInstruction(op_tableget);
+            AddInstruction(op_dup);
+            AddInstruction(op_loadnull);
+            int jumpToDefault = AddInstruction(op_jeq); //jumps to default block. Note that there would be a null on the stack which needs to be cleared, so there will be a bit of code to that before the default block.
+
+            int indexedJumpPC = AddInstruction(op_jindexed, 0);
+
+            List<int> caseBodyPCs = new List<int>();
+            List<int> caseExitPCs = new List<int>();
+
+            //parse case statements
+            while (Match(keyword_case)) {
+                _depth++;
+
+                sws_Expression @case = Expression();
+                @case.ConstantFold();
+
+                if (@case.Type != sws_ExpressionType.Literal) {
+                    throw new sws_ParserError(Peek(), "Expected case expression to be literal.");
+                }
+
+                if (@case.ValueType == sws_DataType.Function || @case.ValueType == sws_DataType.Table || @case.ValueType == sws_DataType.Null) {
+                    throw new sws_ParserError(Peek(), "Case can't be table, function, or null.");
+                }
+
+                map.Add(@case);
+
+                Consume(punctuation_braces_open, "Expected '{' after case expression.");
+
+                caseBodyPCs.Add(GetPC() + 1);
+
+                Body();
+
+                caseExitPCs.Add(AddInstruction(op_jmp));
+
+                SetLocalScopeEnd();
+                _depth--;
+            }
+
+            //create jump table
+            sws_Table swsTable = new sws_Table();
+            Dictionary<sws_Variable, sws_Variable> table = swsTable.Table;
+            for (int i = caseBodyPCs.Count - 1; i >= 0; i--) {
+                int jumpOffset = caseBodyPCs[i] - indexedJumpPC - 1;
+
+                table.Add(new sws_Variable().Constant(map[i].Value, map[i].ValueType, -1), new sws_Variable().Constant((double)jumpOffset, sws_DataType.Double, -1));
+            }
+            int mapConstIndex = AddConst(swsTable, sws_DataType.Table);
+            _frame.Program[mapGetPC].Data = mapConstIndex;
+
+            //clear null from stack (extra value on stack for indexed jump isn't used)
+            ResolveJumpPC(jumpToDefault);
+            AddInstruction(op_loadnull);
+            AddInstruction(op_jeq, 0);
+
+            // * * * * Default Statement * * * *
+
+            Consume(keyword_default, "Expected 'default' statement.");
+            Consume(punctuation_braces_open, "Expected '{' after 'default'.");
+
+            _depth++;
+
+            Body();
+
+            SetLocalScopeEnd();
+            _depth--;
+
+            // * * * * * * * *
+
+            ResolveJumpPCs(caseExitPCs);
+
+            Consume(punctuation_braces_closed, "Expected '}' to end switch statement.");
+        }
+
+        private void ReturnStatement() {
             int returnValuesCount = 0;
 
             while (true) {
@@ -350,39 +645,103 @@ namespace SWScript.compiler {
                 }
             }
 
-            Prg.AddInstruction(op_return, returnValuesCount);
+            AddInstruction(op_return, returnValuesCount);
         }
 
-        private static void PrintStatement(bool println) {
-            Consume(punctuation_parenthesis_open, "Expected '(' after print.");
+        private void PrintStatement(bool println) {
+            Consume(punctuation_parenthesis_open, "Expected '(' after print/println.");
 
-            //print statement with no arguments.
+            //print statement with no arguments. (just give it an empty string instead).
             if (Match(punctuation_parenthesis_closed)) {
-                Prg.AddInstruction(op_getconst, Prg.AddConst(string.Empty, sws_DataType.String));
-                Prg.AddInstruction(op_print, println ? 0 : 1);
+                AddInstruction(op_getconst, AddConst(string.Empty, sws_DataType.String));
+                AddInstruction(op_print, println ? 0 : 1);
                 return;
             }
 
             sws_Expression expr = Expression();
             ExprToBytecode(expr);
 
-            Prg.AddInstruction(op_print, println ? 0 : 1);
+            AddInstruction(op_print, println ? 0 : 1);
 
-            Consume(punctuation_parenthesis_closed, "Expected ')' after print function argument.");
+            Consume(punctuation_parenthesis_closed, "Expected ')' after print/println function argument.");
         }
 
-        private static void Body() {
+        private void SetPropertyStatement() {
+            sws_Expression typeExpr = Expression();
+
+            if (!typeExpr.IsType(sws_ExpressionType.Variable)) {
+                throw new sws_ParserError("Expected property type to be name.");
+            }
+
+            Consume(punctuation_comma, "Expected ','.");
+            sws_Expression nameExpr = Expression();
+            if (!nameExpr.IsType(sws_ExpressionType.Literal)) {
+                throw new sws_ParserError("Expected property name to be literal.");
+            }
+
+            Consume(punctuation_comma, "Expected ','.");
+            sws_Expression valueExpr = Expression();
+            if (!valueExpr.IsType(sws_ExpressionType.Literal)) {
+                throw new sws_ParserError("Expected property value to be literal.");
+            }
+
+            string type = typeExpr.Name;
+            string name = nameExpr.Value.ToString();
+            string valueStr = valueExpr.Value.ToString();
+
+            switch (type) {
+                case "text": {
+                        if(_propertyTexts.ContainsKey(name)) {
+                            HandleWarning(new sws_Warning(Last(), $"Overwritten property text '{name}'."));
+                            _propertyTexts[name] = valueStr;
+                        } else {
+                            _propertyTexts.Add(name, valueStr);
+                        }
+                        break;
+                    }
+                case "number": {
+                        if(!double.TryParse(valueStr, out double value)) {
+                            throw new sws_ParserError($"Unable to parse value '{valueStr}' to double.");
+                        }
+
+                        if (_propertyNumbers.ContainsKey(name)) {
+                            HandleWarning(new sws_Warning(Last(), $"Overwritten property number '{name}'."));
+                            _propertyNumbers[name] = value;
+                        } else {
+                            _propertyNumbers.Add(name, value);
+                        }
+                        break;
+                    }
+                case "bool": {
+                        if (!bool.TryParse(valueStr, out bool value)) {
+                            throw new sws_ParserError($"Unable to parse value '{valueStr}' to bool.");
+                        }
+
+                        if (_propertyBools.ContainsKey(name)) {
+                            HandleWarning(new sws_Warning(Last(), $"Overwritten property bool '{name}'."));
+                            _propertyBools[name] = value;
+                        } else {
+                            _propertyBools.Add(name, value);
+                        }
+                        break;
+                    }
+                default: throw new sws_ParserError($"Expected type of property box to be 'text', 'number', or 'bool', not '{type}'.");
+            }
+        }
+
+        private void Body() {
+            //NOTE: Doesn't close local variable scope, don't remember why I made it like this.
             while (!Match(punctuation_braces_closed)) {
                 ParserMain();
             }
         }
 
         /// <summary>
-        /// Variable assignment and table set statements. This complicated by the fact that there can be multiple assignments in a single statement, for example 'a,b=b,a' to swap variables. Additionally, operators such as += can also be used, even with multiple variables. When there are multiple variables used the same amount is expected on the other side, with the exception of function calls which can return multiple variables, but in that case only one function call and no other expressions are allowed because I don't want to deal with it. Additionally, this code handles increment/decrement statements. I would also like to apologize in advance for the spaghetti code, there are way too many combinations of these conditions. (This code is in the function StatementToBytecode()).
+        /// Variable assignment and table set statements. This is complicated by the fact that there can be multiple assignments in a single statement, for example 'a,b=b,a' to swap variables. Additionally, operators such as += can also be used, even with multiple variables. When there are multiple variables used the same amount is expected on the other side, but if there's less the rest are filled in with nulls. This is with the exception of function calls which can return multiple variables, but in that case only one function call and no other expressions are allowed because I don't want to deal with it. Additionally, this code handles increment/decrement statements. I would also like to apologize in advance for the spaghetti code, there are way too many combinations of these conditions. (This code is in the function StatementToBytecode()).
         /// 
         /// This function was split up from StatementToBytecode so that bytecode could be generated after a statement was parsed, which is used when parsing for loops for the third part of the statement, which needs to be parsed before the body and generated afterward.
         /// </summary>
-        private static sws_Statement ExpressionStatement(bool generateBytecode) {
+        private sws_Statement ExpressionStatement(bool generateBytecode) {
             bool local = Match(keyword_local);
 
             List<sws_Expression> variables = new List<sws_Expression>(); //left side of assignment
@@ -390,7 +749,7 @@ namespace SWScript.compiler {
 
             sws_TokenType assignmentOperator;
 
-            while (!Peek().IsAssignmentOperator()) {
+            while (true) {
                 variables.Add(Expression());
 
                 //check for x++ type statements and function calls
@@ -402,7 +761,7 @@ namespace SWScript.compiler {
                             ExprToBytecode(variables[0], false);
                             return null;
                         } else {
-                            return new sws_Statement(sws_StatementType.IncDec, null, ERROR, variables, local);
+                            return new sws_Statement(sws_StatementType.IncDec, null, EOF, variables, local);
                         }
                     }
 
@@ -412,45 +771,57 @@ namespace SWScript.compiler {
                             ExprToBytecode(variables[0], true, false);
                             return null;
                         } else {
-                            return new sws_Statement(sws_StatementType.Call, null, ERROR, variables, local);
+                            return new sws_Statement(sws_StatementType.Call, null, EOF, variables, local);
                         }
                     }
 
                     //self function calls
-
                     if (variables[0].Type == sws_ExpressionType.SelfCall) {
                         if (generateBytecode) {
-                            ExprToBytecode(variables[0]);
+                            ExprToBytecode(variables[0], true, false);
                             return null;
                         } else {
-                            return null;
+                            return new sws_Statement(sws_StatementType.SelfCall, null, EOF, variables, local);
                         }
                     }
                 }
 
-                if (!Peek().IsAssignmentOperator()) {
-                    Consume(punctuation_comma, "Expected ',' between variables.");
-                }
-            }
-
-            assignmentOperator = Next().TokenType;
-
-            //prevent code like 'local a += 10', which isn't possible
-            if (local && assignmentOperator != operator_assign) {
-                throw new sws_Error(Peek(), $"Can't use '{assignmentOperator}' when declaring local variable. Use '=' instead.");
-            }
-
-            while (true) {
-                expressions.Add(Expression());
-                if (!Match(punctuation_comma)) {
+                if(!Match(punctuation_comma)) {
                     break;
                 }
+            }
+
+            sws_Token assignmentOpToken = Peek();
+
+            if(assignmentOpToken.IsAssignmentOperator()) {
+                Next();
+
+                assignmentOperator = assignmentOpToken.TokenType;
+
+                //prevent code like 'local a += 10', which isn't possible
+                if (local && assignmentOperator != operator_assign) {
+                    throw new sws_ParserError(Last(), $"Can't use '{assignmentOperator}' when declaring local variable. Use '=' instead.");
+                }
+
+                while (true) {
+                    expressions.Add(Expression());
+
+                    if (!Match(punctuation_comma)) {
+                        break;
+                    }
+                }
+
+            } else if (!local) {
+                throw new sws_ParserError(Last(), "Expected assignment operator in statement. Only local variables can be declared without an assignment operator. (ex. 'local a, b')");
+            } else {
+                //used when there is no assignment operator
+                assignmentOperator = EOF;
             }
 
             return new sws_Statement(sws_StatementType.Normal, expressions, assignmentOperator, variables, local);
         }
 
-        private static void StatementToBytecode(sws_Statement statement) {
+        private void StatementToBytecode(sws_Statement statement) {
 
             sws_StatementType type = statement.Type;
             List<sws_Expression> expressions = statement.Expressions;
@@ -458,29 +829,48 @@ namespace SWScript.compiler {
             List<sws_Expression> variables = statement.Variables;
             bool local = statement.Local;
 
+            if(assignmentOperator == EOF && type != sws_StatementType.IncDec) {
+                for (int i = 0; i < variables.Count; i++) {
+                    expressions.Add(new sws_Expression().Literal(null, sws_DataType.Null));
+                }
+                assignmentOperator = operator_assign;
+            }
+
             if (type == sws_StatementType.IncDec) {
                 ExprToBytecode(variables[0], false);
                 return;
             } else if (type == sws_StatementType.Call) {
                 ExprToBytecode(variables[0], true, false);
                 return;
+            } else if (type == sws_StatementType.SelfCall) {
+                ExprToBytecode(variables[0], true, false);
+                return;
             }
 
-            bool functionCallSpecialCase = expressions.Count == 1 && (expressions[0].Type == sws_ExpressionType.LuaCall || expressions[0].Type == sws_ExpressionType.ClosureCall);
+            bool functionCallSpecialCase = expressions.Count == 1 && (expressions[0].Type == sws_ExpressionType.LuaCall || expressions[0].Type == sws_ExpressionType.ClosureCall || expressions[0].Type == sws_ExpressionType.SelfCall);
 
-            if (variables.Count != expressions.Count && !functionCallSpecialCase) {
-                throw new sws_Error(Last(), $"Number of variables on left ({variables.Count}) does not match number of expressions on right ({expressions.Count}). This is only valid when the right side is a single function call.");
+            if (variables.Count < expressions.Count) {
+                throw new sws_ParserError(Last(), $"Number of variables on left ({variables.Count}) less than number of expressions on right ({expressions.Count}).");
             }
 
             if (!functionCallSpecialCase) {
+                //fills in right side in cases like 'a, b = 20'. Becomes equivalent to 'a, b = 20, null'.
+                for (int i = expressions.Count; i < variables.Count; i++) {
+                    expressions.Add(new sws_Expression().Literal(null, sws_DataType.Null));
+                }
+
                 for (int i = 0; i < expressions.Count; i++) {
                     sws_Expression variable = variables[i];
                     sws_Expression expr = expressions[i];
 
+                    if(expr.Type == sws_ExpressionType.ClosureCall || expr.Type == sws_ExpressionType.LuaCall || expr.Type == sws_ExpressionType.SelfCall) {
+                        expr.CallValuesReturned = 1;
+                    }
+
                     bool table = variable.Type == sws_ExpressionType.TableGet;
 
                     //left side, ensure variables exist
-                    Prg.AddVariable(variable.Name, local);
+                    AddVariable(variable.Name, local ? sws_VariableType.Local : 0);
 
                     //right side of statement (don't do this for && and ||)
                     if (assignmentOperator != operator_booland_assign && assignmentOperator != operator_boolor_assign) {
@@ -495,15 +885,16 @@ namespace SWScript.compiler {
                     if (table) {
                         ExprToBytecode(variable.Indices.Last());
                         TableGetNoLastIndex(variable);
-                        Prg.AddInstruction(op_tableset, 1);
+                        AddInstruction(op_tableset, 1);
                     } else {
-                        Prg.AddVarSetInstruction(variable.Name);
+                        AddVarSetInstruction(variable.Name);
                     }
                 }
             } else {
+                expressions[0].CallValuesReturned = variables.Count;
                 //left side, ensure variables exist
                 for (int i = 0; i < variables.Count; i++) {
-                    Prg.AddVariable(variables[i].Name, local);
+                    AddVariable(variables[i].Name, local ? sws_VariableType.Local : 0);
                 }
 
                 //right side of statement (don't do this for boolean and / or)
@@ -523,93 +914,79 @@ namespace SWScript.compiler {
                     if (table) {
                         ExprToBytecode(variable.Indices.Last());
                         TableGetNoLastIndex(variable);
-                        Prg.AddInstruction(op_tableset, 1);
+                        AddInstruction(op_tableset, 1);
                     } else {
-                        Prg.AddVarSetInstruction(variable.Name);
+                        AddVarSetInstruction(variable.Name);
                     }
                 }
             }
 
-            Prg.SetLocalScopeStart();
+            SetLocalScopeStart();
 
             void AssignOperatorCase(sws_Expression variable, sws_Expression expression) {
                 ExprToBytecode(variable);
 
                 switch (assignmentOperator) {
-                    case operator_add_assign:
-                        Prg.AddInstruction(op_add);
-                        break;
-                    case operator_sub_assign:
-                        Prg.AddInstruction(op_sub);
-                        break;
-                    case operator_mul_assign:
-                        Prg.AddInstruction(op_mul);
-                        break;
-                    case operator_div_assign:
-                        Prg.AddInstruction(op_div);
-                        break;
-                    case operator_floordiv_assign:
-                        Prg.AddInstruction(op_floordiv);
-                        break;
-                    case operator_pow_assign:
-                        Prg.AddInstruction(op_pow);
-                        break;
-                    case operator_mod_assign:
-                        Prg.AddInstruction(op_mod);
-                        break;
+                    case operator_add_assign: AddInstruction(op_add); break;
+                    case operator_sub_assign: AddInstruction(op_sub); break;
+                    case operator_mul_assign: AddInstruction(op_mul); break;
+                    case operator_div_assign: AddInstruction(op_div); break;
+                    case operator_floordiv_assign: AddInstruction(op_floordiv); break;
+                    case operator_pow_assign: AddInstruction(op_pow); break;
+                    case operator_mod_assign: AddInstruction(op_mod); break;
                     case operator_booland_assign: {
-                            Prg.AddInstruction(op_jfnp);
-                            int pc = Prg.GetPC();
+                            AddInstruction(op_jfnp);
+                            int pc = GetPC();
                             
                             ExprToBytecode(expression);
 
-                            Prg.ResolveJumpPC(pc);
+                            ResolveJumpPC(pc);
                             break;
                         }
                     case operator_boolor_assign: {
-                            Prg.AddInstruction(op_jtnp);
-                            int pc = Prg.GetPC();
+                            AddInstruction(op_jtnp);
+                            int pc = GetPC();
 
                             ExprToBytecode(expression);
                             
-                            Prg.ResolveJumpPC(pc);
+                            ResolveJumpPC(pc);
                             break;
                         }
-                    case operator_bitand_assign:
-                        Prg.AddInstruction(op_bitand);
-                        break;
-                    case operator_bitxor_assign:
-                        Prg.AddInstruction(op_bitxor);
-                        break;
-                    case operator_bitor_assign:
-                        Prg.AddInstruction(op_bitor);
-                        break;
-                    case operator_bitshiftleft_assign:
-                        Prg.AddInstruction(op_bitshiftleft);
-                        break;
-                    case operator_bitshiftright_assign:
-                        Prg.AddInstruction(op_bitshiftright);
-                        break;
+                    case operator_bitand_assign: AddInstruction(op_bitand); break;
+                    case operator_bitxor_assign: AddInstruction(op_bitxor); break;
+                    case operator_bitor_assign: AddInstruction(op_bitor); break;
+                    case operator_bitshiftleft_assign: AddInstruction(op_bitshiftleft); break;
+                    case operator_bitshiftright_assign: AddInstruction(op_bitshiftright); break;
+                    case operator_concat_assign: AddInstruction(op_concat, 0); break;
                 }
             }
         }
 
         //Similar to regular table get, but doesn't get the last index. This is primarly used to set tables in expression statements.
-        private static void TableGetNoLastIndex(sws_Expression variable) {
-            Prg.AddVarGetInstruction(variable.Name);
+        private void TableGetNoLastIndex(sws_Expression variable) {
+            AddVarGetInstruction(variable.Name);
 
             for (int i = 0; i < variable.Indices.Count - 1; i++) {
                 ExprToBytecode(variable.Indices[i]);
-                Prg.AddInstruction(op_tableget);
+                AddInstruction(op_tableget);
             }
         }
 
         //functions for parsing expressions. Only ExprToBytecode, TryGetExpression, and Expression are called by other parts of the parser. The remaining functions are a part of a recursive descent parser for expressions.
 
-        private static List<int> ExprToBytecode(sws_Expression expression, bool incDecReturnValues = true, bool callReturnValues = true, bool conditionalExpr = false) {
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="expression"></param>
+        /// <param name="incDecReturnValues"></param>
+        /// <param name="callReturnValues"></param>
+        /// <param name="conditionalExpr"></param>
+        /// <returns>List of pc indexes for instructions of a conditional expression which jump away when it evaluates false. These are later resolved by the parser to make them skip a block of code, which can't be done now as that code hasn't been parsed yet.</returns>
+        /// <exception cref="sws_ParserError"></exception>
+        private List<int> ExprToBytecode(sws_Expression expression, bool incDecReturnValues = true, bool callReturnValues = true, bool conditionalExpr = false) {
             int flagModCounter = 0;
 
-            int pcStart = Prg.GetPC();
+            int pcStart = GetPC();
             pcStart = Math.Max(0, pcStart);
 
             List<int> conditionalSkipJmpsPCs = new List<int>();
@@ -617,25 +994,26 @@ namespace SWScript.compiler {
 
             expression = expression.ConstantFold();
 
+            bool functionCallParent = expression.Type == sws_ExpressionType.ClosureCall || expression.Type == sws_ExpressionType.LuaCall || expression.Type == sws_ExpressionType.SelfCall; //NOTE: gets set false in ExprToBytecodeRecursive if true.
             ExprToBytecodeRecursive(expression);
 
             if (conditionalExpr) {
-                for (int i = pcStart; i < Prg.Frame.Program.Count; i++) {                    
-                    sws_Op opcode = Prg.Frame.Program[i];
+                for (int i = pcStart; i < _frame.Program.Count; i++) {                    
+                    sws_Op opcode = _frame.Program[i];
 
-                    if (opcode.IsJumpOp() && (i + opcode.Data - Prg.Frame.Program.Count == -1) && !conditionalSkipJmpsExceptions.Contains(i)) {
+                    if (opcode.IsJumpOp() && (i + opcode.Data - _frame.Program.Count == -1) && !conditionalSkipJmpsExceptions.Contains(i)) {
                         conditionalSkipJmpsPCs.Add(i);
                     }
                 }
             }
 
-            bool jfalseCanSimplify = Prg.JumpFCanSimplify();
+            bool jfalseCanSimplify = JumpFCanSimplify();
 
             if (jfalseCanSimplify) {
-                for (int i = pcStart; i < Prg.Frame.Program.Count; i++) {
-                    sws_Op opcode = Prg.Frame.Program[i];
+                for (int i = pcStart; i < _frame.Program.Count; i++) {
+                    sws_Op opcode = _frame.Program[i];
 
-                    if (opcode.IsJumpOp() && (i + opcode.Data - Prg.Frame.Program.Count == 0)) {
+                    if (opcode.IsJumpOp() && (i + opcode.Data - _frame.Program.Count == 0)) {
                         opcode.Data--;
                     }
                 }
@@ -651,39 +1029,27 @@ namespace SWScript.compiler {
                             }
 
                             switch (expr.Op) {
-                                case operator_boolnot: {
-                                        Prg.AddInstruction(op_boolnot);
-                                        break;
-                                    }
-                                case operator_bitnot: {
-                                        Prg.AddInstruction(op_bitnot);
-                                        break;
-                                    }
-                                case operator_minus: {
-                                        Prg.AddInstruction(op_minus);
-                                        break;
-                                    }
-                                case operator_length: {
-                                        Prg.AddInstruction(op_len);
-                                        break;
-                                    }
+                                case operator_boolnot: AddInstruction(op_boolnot); break;
+                                case operator_bitnot: AddInstruction(op_bitnot); break;
+                                case operator_minus: AddInstruction(op_minus); break;
+                                case operator_length: AddInstruction(op_len); break;
                                 case operator_prefixincrement: {
                                         bool table = expr.Right.Type == sws_ExpressionType.TableGet;
 
                                         ExprToBytecodeRecursive(expr.Right);
 
-                                        Prg.AddInstruction(op_addimm, 1);
+                                        AddInstruction(op_addimm, 1);
 
                                         if (incDecReturnValues) {
-                                            Prg.AddInstruction(op_dup);
+                                            AddInstruction(op_dup);
                                         }
 
                                         if (table) {
                                             ExprToBytecodeRecursive(expr.Right.Indices.Last());
                                             TableGetNoLastIndex(expr.Right);
-                                            Prg.AddInstruction(op_tableset, 1);
+                                            AddInstruction(op_tableset, 1);
                                         } else {
-                                            Prg.AddVarSetInstruction(expr.Right.Name);
+                                            AddVarSetInstruction(expr.Right.Name);
                                         }
 
                                         break;
@@ -693,18 +1059,18 @@ namespace SWScript.compiler {
 
                                         ExprToBytecodeRecursive(expr.Right);
 
-                                        Prg.AddInstruction(op_addimm, -1);
+                                        AddInstruction(op_addimm, -1);
 
                                         if (incDecReturnValues) {
-                                            Prg.AddInstruction(op_dup);
+                                            AddInstruction(op_dup);
                                         }
 
                                         if (table) {
                                             ExprToBytecodeRecursive(expr.Right.Indices.Last());
                                             TableGetNoLastIndex(expr.Right);
-                                            Prg.AddInstruction(op_tableset, 1);
+                                            AddInstruction(op_tableset, 1);
                                         } else {
-                                            Prg.AddVarSetInstruction(expr.Right.Name);
+                                            AddVarSetInstruction(expr.Right.Name);
                                         }
 
                                         break;
@@ -715,17 +1081,17 @@ namespace SWScript.compiler {
                                         ExprToBytecodeRecursive(expr.Right);
 
                                         if(incDecReturnValues) {
-                                            Prg.AddInstruction(op_dup);
+                                            AddInstruction(op_dup);
                                         }
 
-                                        Prg.AddInstruction(op_addimm, 1);
+                                        AddInstruction(op_addimm, 1);
 
                                         if (table) {
                                             ExprToBytecodeRecursive(expr.Right.Indices.Last());
                                             TableGetNoLastIndex(expr.Right);
-                                            Prg.AddInstruction(op_tableset, 1);
+                                            AddInstruction(op_tableset, 1);
                                         } else {
-                                            Prg.AddVarSetInstruction(expr.Right.Name);
+                                            AddVarSetInstruction(expr.Right.Name);
                                         }
 
                                         break;
@@ -736,17 +1102,17 @@ namespace SWScript.compiler {
                                         ExprToBytecodeRecursive(expr.Right);
 
                                         if (incDecReturnValues) {
-                                            Prg.AddInstruction(op_dup);
+                                            AddInstruction(op_dup);
                                         }
 
-                                        Prg.AddInstruction(op_addimm, -1);
+                                        AddInstruction(op_addimm, -1);
 
                                         if (table) {
                                             ExprToBytecodeRecursive(expr.Right.Indices.Last());
                                             TableGetNoLastIndex(expr.Right);
-                                            Prg.AddInstruction(op_tableset, 1);
+                                            AddInstruction(op_tableset, 1);
                                         } else {
-                                            Prg.AddVarSetInstruction(expr.Right.Name);
+                                            AddVarSetInstruction(expr.Right.Name);
                                         }
 
                                         break;
@@ -766,152 +1132,153 @@ namespace SWScript.compiler {
                             }
 
                             switch (expr.Op) {
-                                case operator_boolor: {
-                                        ExprToBytecodeOr(expr);
-                                        break;
-                                    }
+                                case operator_boolor: ExprToBytecodeOr(expr); break;
                                 case operator_booland: {
                                         ExprToBytecodeAnd(expr, (expr.Parent != null && expr.Parent.Op == operator_booland && expr.Parent.Left == expr) || (expr.Parent != null && expr.Parent.Parent != null && expr.Parent.Parent.Op == operator_booland && expr.Parent.Parent.Right.Left == expr));
                                         break;
                                     }
-                                case operator_bitor:
-                                    Prg.AddInstruction(op_bitand);
-                                    break;
-                                case operator_bitxor:
-                                    Prg.AddInstruction(op_bitxor);
-                                    break;
-                                case operator_bitand:
-                                    Prg.AddInstruction(op_bitand);
-                                    break;
-                                case operator_eq:
-                                    Prg.AddInstruction(op_eq);
-                                    break;
-                                case operator_neq:
-                                    Prg.AddInstruction(op_neq);
-                                    break;
-                                case operator_gt:
-                                    Prg.AddInstruction(op_lt);
-                                    break;
-                                case operator_gte:
-                                    Prg.AddInstruction(op_lte);
-                                    break;
-                                case operator_lt:
-                                    Prg.AddInstruction(op_lt);
-                                    break;
-                                case operator_lte:
-                                    Prg.AddInstruction(op_lte);
-                                    break;
-                                case operator_bitshiftleft:
-                                    Prg.AddInstruction(op_bitshiftleft);
-                                    break;
-                                case operator_bitshiftright:
-                                    Prg.AddInstruction(op_bitshiftright);
-                                    break;
-                                case operator_add:
-                                    Prg.AddInstruction(op_add);
-                                    break;
-                                case operator_sub:
-                                    Prg.AddInstruction(op_sub);
-                                    break;
-                                case operator_mul:
-                                    Prg.AddInstruction(op_mul);
-                                    break;
-                                case operator_div:
-                                    Prg.AddInstruction(op_div);
-                                    break;
-                                case operator_floordiv:
-                                    Prg.AddInstruction(op_floordiv);
-                                    break;
-                                case operator_mod:
-                                    Prg.AddInstruction(op_mod);
-                                    break;
-                                case operator_pow:
-                                    Prg.AddInstruction(op_pow);
-                                    break;
-                                case operator_concat:
-                                    Prg.AddInstruction(op_concat, 0);
-                                    break;
+                                case operator_bitor: AddInstruction(op_bitand); break;
+                                case operator_bitxor: AddInstruction(op_bitxor); break;
+                                case operator_bitand: AddInstruction(op_bitand); break;
+                                case operator_eq: AddInstruction(op_eq); break;
+                                case operator_neq: AddInstruction(op_neq); break;
+                                case operator_gt: AddInstruction(op_lt); break;
+                                case operator_gte: AddInstruction(op_lte); break;
+                                case operator_lt: AddInstruction(op_lt); break;
+                                case operator_lte: AddInstruction(op_lte); break;
+                                case operator_bitshiftleft: AddInstruction(op_bitshiftleft); break;
+                                case operator_bitshiftright: AddInstruction(op_bitshiftright); break;
+                                case operator_add: AddInstruction(op_add); break;
+                                case operator_sub: AddInstruction(op_sub); break;
+                                case operator_mul: AddInstruction(op_mul); break;
+                                case operator_div: AddInstruction(op_div); break;
+                                case operator_floordiv: AddInstruction(op_floordiv); break;
+                                case operator_mod: AddInstruction(op_mod); break;
+                                case operator_pow: AddInstruction(op_pow); break;
+                                case operator_concat: AddInstruction(op_concat, 0); break;
                             }
                             break;
                         }
                     case sws_ExpressionType.Literal: {
                             if (ValidImmediateValue(expr)) {
-                                Prg.AddInstruction(op_loadimm, (int)(double)expr.Value);
+                                AddInstruction(op_loadimm, (int)(double)expr.Value);
                                 break;
                             }
 
                             if (expr.ValueType == sws_DataType.Bool) {
-                                Prg.AddInstruction(op_loadbool, (bool)expr.Value ? 1 : 0);
+                                AddInstruction(op_loadbool, (bool)expr.Value ? 1 : 0);
                                 break;
                             }
 
                             if (expr.ValueType == sws_DataType.Null) {
-                                Prg.AddInstruction(op_loadnull);
+                                AddInstruction(op_loadnull);
                                 break;
                             }
 
-                            Prg.AddInstruction(op_getconst, Prg.AddConst(expr.Value, expr.ValueType));
+                            AddInstruction(op_getconst, AddConst(expr.Value, expr.ValueType));
 
                             break;
                         }
                     case sws_ExpressionType.Variable: {
-                            Prg.AddVarGetInstruction(expr.Name);
+                            AddVarGetInstruction(expr.Name);
                             break;
                         }
                     case sws_ExpressionType.Table: {
+                            if (expr.CanTableBeConst()) {
+                                sws_Table swsTable = new sws_Table();
+                                Dictionary<sws_Variable, sws_Variable> table = swsTable.Table;
+
+                                for (int i = 0; i < expr.Elements.Count; i++) {
+                                    sws_Expression index = expr.ElementIndices[i];
+                                    sws_Expression value = expr.Elements[i];
+                                    table.Add(new sws_Variable().Constant(index.Value, index.ValueType, -1), new sws_Variable().Constant(value.Value, value.ValueType, -1));
+                                }
+
+                                AddInstruction(op_getconst, AddConst(swsTable, sws_DataType.Table));
+
+                                break;
+                            }
+
+                            //
+
                             for (int i = expr.Elements.Count - 1; i >= 0; i--) {
                                 ExprToBytecodeRecursive(expr.Elements[i]);
                                 ExprToBytecodeRecursive(expr.ElementIndices[i]);
                             }
 
-                            Prg.AddInstruction(op_tablenew);
+                            AddInstruction(op_tablenew);
 
                             if (expr.Elements.Count > 0) {
-                                Prg.AddInstruction(op_tableset, -expr.Elements.Count);
+                                AddInstruction(op_tableset, -expr.Elements.Count);
                             }
                             break;
                         }
                     case sws_ExpressionType.TableGet: {
                             if (expr.Name != null) {
-                                Prg.AddVarGetInstruction(expr.Name);
+                                AddVarGetInstruction(expr.Name);
                             } else {
                                 ExprToBytecodeRecursive(expr.Right);
                             }
 
                             for (int i = 0; i < expr.Indices.Count; i++) {
                                 ExprToBytecodeRecursive(expr.Indices[i]);
-                                Prg.AddInstruction(op_tableget);
+                                AddInstruction(op_tableget);
                             }
 
                             break;
                         }
                     case sws_ExpressionType.LuaCall: {
+                            if (!callReturnValues && functionCallParent) {
+                                expr.CallValuesReturned = 0;
+                                functionCallParent = false;
+                            } else if (expr.CallValuesReturned == 0) {
+                                expr.CallValuesReturned = 1;
+                            }
+
                             for (int i = expr.Arguments.Count - 1; i >= 0; i--) {
                                 ExprToBytecodeRecursive(expr.Arguments[i]);
                             }
 
-                            Prg.AddInstruction(op_closure, Prg.AddConst("lua " + expr.Name, sws_DataType.String));
+                            AddInstruction(op_closure, AddConst("lua " + expr.Name, sws_DataType.String));
 
-                            Prg.AddInstruction(op_call, expr.Arguments.Count * (callReturnValues ? 1 : -1));
+                            AddCallInstruction(expr.Arguments.Count, expr.CallValuesReturned);
                             break;
                         }
                     case sws_ExpressionType.ClosureCall: {
+                            //Do this bit before the arguments else functionCallParent could be true for an inner function being parsed.
+                            if (!callReturnValues && functionCallParent) {
+                                //in a case like 'somefunc()()', 'somefunc()' must return a value.
+                                if (expr.Parent != null && expr.Parent.Type == sws_ExpressionType.ClosureCall) {
+                                    expr.CallValuesReturned = 1;
+                                } else {
+                                    expr.CallValuesReturned = 0;
+                                }
+                                functionCallParent = false;
+                            } else if (expr.CallValuesReturned == 0) {
+                                expr.CallValuesReturned = 1;
+                            }
+
+                            //in 'a()()', the last call doesn't return values.
+                            if (!callReturnValues && expr.Parent == null) {
+                                expr.CallValuesReturned = 0;
+                            }
+
                             if (expr.Left.Name == "_keys") {
                                 if (expr.Arguments.Count != 1) {
-                                    throw new sws_Error(Peek(), $"Expected 1 argument for '_keys', instead got {expr.Arguments.Count}.");
+                                    throw new sws_ParserError(Peek(), $"Expected 1 argument for '_keys', instead got {expr.Arguments.Count}.");
                                 }
 
                                 ExprToBytecodeRecursive(expr.Arguments[0]);
-                                Prg.AddInstruction(op_tablekeys);
+                                AddInstruction(op_tablekeys);
 
                                 break;
                             } else if (expr.Left.Name == "_type") {
                                 if (expr.Arguments.Count != 1) {
-                                    throw new sws_Error(Peek(), $"Expected 1 argument for '_type', instead got {expr.Arguments.Count}.");
+                                    throw new sws_ParserError(Peek(), $"Expected 1 argument for '_type', instead got {expr.Arguments.Count}.");
                                 }
 
                                 ExprToBytecodeRecursive(expr.Arguments[0]);
-                                Prg.AddInstruction(op_type);
+                                AddInstruction(op_type);
 
                                 break;
                             }
@@ -922,18 +1289,63 @@ namespace SWScript.compiler {
 
                             ExprToBytecodeRecursive(expr.Left);
 
-                            Prg.AddInstruction(op_call, expr.Arguments.Count * (callReturnValues ? 1 : -1));
+                            AddCallInstruction(expr.Arguments.Count, expr.CallValuesReturned);
                             break;
                         }
                     case sws_ExpressionType.SelfCall: {
-                            throw new sws_Error(Peek(), "This type call is currently not implemented.");
+                            sws_Expression rootCall = expr;
+
+                            for (int i = rootCall.Arguments.Count - 1; i >= 0; i--) {
+                                ExprToBytecodeRecursive(rootCall.Arguments[i]);
+                            }
+
+                            while (rootCall.Left.Type == sws_ExpressionType.SelfCall) {
+                                rootCall = rootCall.Left;
+
+                                for (int i = rootCall.Arguments.Count - 1; i >= 0; i--) {
+                                    ExprToBytecodeRecursive(rootCall.Arguments[i]);
+                                }
+                            }
+
+                            ExprToBytecode(rootCall.Left);
+
+                            SelfCallRecursive();
+
+                            void SelfCallRecursive() {
+                                AddInstruction(op_dup);
+                                ExprToBytecode(rootCall.Right);
+                                AddInstruction(op_tableget);
+
+                                if (!callReturnValues) {
+                                    if (functionCallParent) {
+                                        rootCall.CallValuesReturned = rootCall.Parent != null && rootCall.Parent.Type == sws_ExpressionType.SelfCall ? 1 : 0;
+                                        //special case 'a:b()()', 'a:b()' must return value.
+                                        if (expr.Parent != null && expr.Parent.Type == sws_ExpressionType.ClosureCall) {
+                                            expr.CallValuesReturned = 1;
+                                        }
+
+                                        functionCallParent = false;
+                                    }
+                                } else if (expr.CallValuesReturned == 0) {
+                                    rootCall.CallValuesReturned = 1;
+                                }
+
+                                AddCallInstruction(rootCall.Arguments.Count + 1, rootCall.CallValuesReturned);
+
+                                if (rootCall.Parent != null && rootCall.Parent.Type == sws_ExpressionType.SelfCall) {
+                                    rootCall = rootCall.Parent;
+                                    SelfCallRecursive();
+                                }
+                            }
+
+                            //throw new sws_Error(Last(), "This type call is currently not implemented.");
                             break;
                         }
                     case sws_ExpressionType.Closure: {
                             if (expr.LuaClosure) {
-                                Prg.AddVarGetInstruction("lua " + expr.Name);
+                                AddVarGetInstruction("lua " + expr.Name);
                             } else {
-                                Prg.AddVarGetInstruction(expr.Name);
+                                AddVarGetInstruction(expr.Name);
                             }
                             break;
                         }
@@ -947,7 +1359,7 @@ namespace SWScript.compiler {
 
                 ExprToBytecodeOrRecursive(expr);
 
-                Prg.ResolveJumpFlag(flag, conditionalExpr ? 1 : 0);
+                ResolveJumpFlag(flag, conditionalExpr ? 1 : 0);
 
                 void ExprToBytecodeOrRecursive(sws_Expression e) {
                     if (e.Left.Op == operator_boolor) {
@@ -957,10 +1369,10 @@ namespace SWScript.compiler {
                     }
 
                     if (conditionalExpr) {
-                        Prg.AddInstruction(op_jtrue, flag);
-                        conditionalSkipJmpsExceptions.Add(Prg.GetPC());
+                        AddInstruction(op_jtrue, flag);
+                        conditionalSkipJmpsExceptions.Add(GetPC());
                     } else {
-                        Prg.AddInstruction(op_jtnp, flag);
+                        AddInstruction(op_jtnp, flag);
                     }
 
                     ExprToBytecodeRecursive(e.Right);
@@ -972,7 +1384,7 @@ namespace SWScript.compiler {
 
                 ExprToBytecodeAndRecursive(expr);
 
-                Prg.ResolveJumpFlag(flag, childOfOr ? 1 : 0);
+                ResolveJumpFlag(flag, childOfOr ? 1 : 0);
 
                 void ExprToBytecodeAndRecursive(sws_Expression e) {
                     if(e.Left.Op == operator_booland) {
@@ -982,9 +1394,9 @@ namespace SWScript.compiler {
                     }
 
                     if (conditionalExpr || childOfOr) {
-                        Prg.AddJumpFInstruction(flag);
+                        AddJumpFInstruction(flag);
                     } else {
-                        Prg.AddInstruction(op_jfnp, flag);
+                        AddInstruction(op_jfnp, flag);
                     }
 
                     ExprToBytecodeRecursive(e.Right);
@@ -996,33 +1408,31 @@ namespace SWScript.compiler {
         /// See if next tokens are expression by running expression function and keeping track of starting conditions to revert in case of error. If the expression includes a closure it may even generate bytecode. If the error is one that would only happen if an actual expression was parsed, the errors are printed (the detection for this is very bad, luckly any errors will be caught after the return statement is parsed).
         /// </summary>
         /// <returns></returns>
-        private static sws_Expression TryGetExpression() {
-            sws_Error.Suppress = true;
-
-            int currentTemp = current;
+        private sws_Expression TryGetExpression() {
+            int currentTemp = _current;
 
             try {
-                sws_Error.Suppress = true;
-                
+                _sws.SuppressParserErrors = true;
+
                 sws_Expression expr = Expression();
-                
-                sws_Error.Suppress = false;
+
+                _sws.SuppressParserErrors = false;
 
                 return expr;
-            } catch(sws_Error e) {
-                sws_Error.Suppress = false;
+            } catch(sws_ParserError e) {
+                _sws.SuppressParserErrors = false;
                 if (e.Message != "expr_unexpected") {
-                    throw new sws_Error(e);
+                    throw new sws_ParserError(e);
                 }
-                current = currentTemp;
+                _current = currentTemp;
                 return null;
             }
         }
 
-        private static sws_Expression Expression() {
+        private sws_Expression Expression() {
             //catch closures first (lua closures are handled in Primary())
             if(Match(keyword_func)) {
-                string name = Prg.UnnammedFuncCount.ToString();
+                string name = _unnammedFuncCount.ToString();
                 
                 ParseFunction(true);
                 
@@ -1034,7 +1444,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression BoolOr() {
+        private sws_Expression BoolOr() {
             sws_Expression expr = BoolAnd();
 
             while (Match(operator_boolor)) {
@@ -1045,7 +1455,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression BoolAnd() {
+        private sws_Expression BoolAnd() {
             sws_Expression expr = BitwiseOr();
 
             while (Match(operator_booland)) {
@@ -1056,7 +1466,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression BitwiseOr() {
+        private sws_Expression BitwiseOr() {
             sws_Expression expr = BitwiseXor();
 
             while (Match(operator_bitor)) {
@@ -1067,7 +1477,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression BitwiseXor() {
+        private sws_Expression BitwiseXor() {
             sws_Expression expr = BitwiseAnd();
 
             while (Match(operator_bitxor)) {
@@ -1078,7 +1488,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression BitwiseAnd() {
+        private sws_Expression BitwiseAnd() {
             sws_Expression expr = Equality();
 
             while (Match(operator_bitand)) {
@@ -1089,7 +1499,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression Equality() {
+        private sws_Expression Equality() {
             sws_Expression expr = Comparison();
 
             while (Match(new sws_TokenType[] { operator_eq, operator_neq })) {
@@ -1101,7 +1511,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression Comparison() {
+        private sws_Expression Comparison() {
             sws_Expression expr = BitwiseShifts();
 
             while (Match(new sws_TokenType[] { operator_gt, operator_gte, operator_lt, operator_lte })) {
@@ -1113,7 +1523,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression BitwiseShifts() {
+        private sws_Expression BitwiseShifts() {
             sws_Expression expr = Term();
 
             while (Match(new sws_TokenType[] { operator_bitshiftleft, operator_bitshiftright })) {
@@ -1125,7 +1535,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression Term() {
+        private sws_Expression Term() {
             sws_Expression expr = Factor();
 
             while (Match(new sws_TokenType[] { operator_add, operator_sub, operator_concat })) {
@@ -1137,7 +1547,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression Factor() {
+        private sws_Expression Factor() {
             sws_Expression expr = Unary();
 
             while (Match(new sws_TokenType[] { operator_mul, operator_div, operator_floordiv, operator_mod })) {
@@ -1149,7 +1559,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression Unary() {
+        private sws_Expression Unary() {
             if (Match(new sws_TokenType[] { operator_boolnot, operator_bitnot, operator_minus, operator_length, punctuation_doubleplus, punctuation_doubleminus })) {
                 sws_TokenType op = Last().TokenType;
                 if (op == punctuation_doubleplus) {
@@ -1164,7 +1574,7 @@ namespace SWScript.compiler {
             return Exponent();
         }
 
-        private static sws_Expression Exponent() {
+        private sws_Expression Exponent() {
             sws_Expression expr = Primary();
 
             while (Match(operator_pow)) {
@@ -1176,7 +1586,7 @@ namespace SWScript.compiler {
             return expr;
         }
 
-        private static sws_Expression Primary() {
+        private sws_Expression Primary() {
             if (Match(keyword_null)) {
                 return new sws_Expression().Literal(null, sws_DataType.Null);
             }
@@ -1225,11 +1635,11 @@ namespace SWScript.compiler {
                         expr = new sws_Expression().LuaCall(name, ParseFuncArgs());
                     } else {
                         expr = new sws_Expression().Closure(name, true);
-                        Prg.AddLuaClosure(name);
+                        AddLuaClosure(name);
                     }
                 }
 
-                TableGet();
+                TableGet(new List<sws_Expression>());
 
                 //handle function calls
                 if (Array.IndexOf(new sws_TokenType[] { identifier, punctuation_brackets_closed, punctuation_parenthesis_closed }, Last().TokenType) != -1 && Match(punctuation_parenthesis_open)) {
@@ -1242,9 +1652,8 @@ namespace SWScript.compiler {
                 }
 
                 //handle table get
-                void TableGet() {
+                void TableGet(List<sws_Expression> indices) {
                     if (Peek().TokenType == punctuation_brackets_open || Peek().TokenType == punctuation_period || Peek().TokenType == punctuation_colon) {
-                        List<sws_Expression> indices = new List<sws_Expression>();
 
                         //Parses 'data["a"]["b"]' and 'data.a.b' syntax for reading table values.
                         bool selfCall = Peek().TokenType == punctuation_colon;
@@ -1255,33 +1664,44 @@ namespace SWScript.compiler {
                             Consume(punctuation_brackets_closed, "Expected ']' after table index.");
                         } else {
                             if (Peek().TokenType != identifier) {
-                                throw new sws_Error(Peek(), $"Token type '{Peek().TokenType}' used as table index.");
+                                throw new sws_ParserError(Peek(), $"Token type '{Peek().TokenType}' used as table index.");
                             }
                             indices.Add(new sws_Expression().Literal(Peek().Literal, sws_DataType.String));
                             Next();
                         }
 
                         if (!selfCall) {
-                            expr = new sws_Expression().TableGet(expr, indices);
-                            if (Match(punctuation_brackets_open) || Match(punctuation_period)) {
-                                TableGet();
+                            if (expr.Type != sws_ExpressionType.TableGet) {
+                                expr = new sws_Expression().TableGet(expr, indices);
+                            }
+
+                            if (Peek().TokenType == punctuation_brackets_open || Peek().TokenType == punctuation_period || Peek().TokenType == punctuation_colon) {
+                                TableGet(indices);
                             } else if (Match(punctuation_parenthesis_open)) {
                                 Call();
                             }
                         } else {
                             Consume(punctuation_parenthesis_open, $"Expected table value to be called when using ':' syntax.");
-
-                            Call(expr, indices.Last());
+                            Call(indices.Last());
+                            indices.Remove(indices.Last());
                         }
                     }
                 }
 
-                void Call(sws_Expression arg=null, sws_Expression funcName=null) {
+                void Call(sws_Expression selfCallName = null) {
                     List<sws_Expression> args = ParseFuncArgs();
 
-                    if (arg != null) {
-                        args.Insert(0, arg);
-                        expr = new sws_Expression().SelfCall(expr, funcName, args);
+                    if (selfCallName != null) {
+                        expr = new sws_Expression().SelfCall(expr, selfCallName, args);
+                        if (Match(punctuation_colon)) {
+                            Consume(identifier, "Expected function name after ':'.");
+                            
+                            sws_Expression funcName = new sws_Expression().Literal(Last().Literal, sws_DataType.String);
+                            
+                            Consume(punctuation_parenthesis_open, "Expected '('.");
+                            
+                            Call(funcName);
+                        }
                     } else {
                         expr = new sws_Expression().ClosureCall(expr, args);
                     }
@@ -1290,7 +1710,7 @@ namespace SWScript.compiler {
                     if (Array.IndexOf(new sws_TokenType[] { identifier, punctuation_brackets_closed, punctuation_parenthesis_closed }, Last().TokenType) != -1 && Match(punctuation_parenthesis_open)) {
                         Call();
                     } else {
-                        TableGet();
+                        TableGet(new List<sws_Expression>());
                     }
                 }
 
@@ -1314,7 +1734,7 @@ namespace SWScript.compiler {
 
                             //case where comma is left after last argument (ex. 'test(2,4,)')
                             if (Peek().TokenType == punctuation_parenthesis_closed) {
-                                throw new sws_Error(Peek(), "Expected function call argument after ','.");
+                                throw new sws_ParserError(Peek(), "Expected function call argument after ','.");
                             }
                         }
                     }
@@ -1340,11 +1760,16 @@ namespace SWScript.compiler {
                 while (Peek().TokenType != punctuation_braces_closed) {
                     //check for syntax to initilize element at specific index, uses index is a single token.
                     sws_Expression index = new sws_Expression().Literal((double)indexCount, sws_DataType.Double);
-                    if (Peek2().TokenType == operator_assign) {
+                    
+                    if (Match(punctuation_brackets_open)) { //[<expr>]=<expr>
+                        index = Expression();
+                        Consume(punctuation_brackets_closed, "expected ']'.");
+                        Consume(operator_assign, "Expected '='.");
+                    } else if (Peek2().TokenType == operator_assign) {//<str literal>=<expr>
                         index = new sws_Expression().Literal(Peek());
                         Next(); //skip index
-                        Next(); //skip '='
-                    } else {
+                        Consume(operator_assign, "Expected '='.");
+                    } else { //<expr>
                         indexCount++;
                     }
 
@@ -1372,20 +1797,20 @@ namespace SWScript.compiler {
                 return expr;
             }
 
-            throw new sws_Error(Peek(), $"Unexpected token '{Peek().TokenType}' in expression.", "expr_unexpected");
+            throw new sws_ParserError(Peek(), $"Unexpected token '{Peek().TokenType}' in expression.", "expr_unexpected");
         }
 
         //helper functions for parser start here
 
-        private static sws_Token Consume(sws_TokenType tokenType, string errorMessage = "") {
+        private sws_Token Consume(sws_TokenType tokenType, string errorMessage = "") {
             if (Match(tokenType)) {
                 return Last();
             }
 
-            throw new sws_Error(Peek(), errorMessage);
+            throw new sws_ParserError(Peek(), errorMessage);
         }
 
-        private static bool Match(sws_TokenType tokenType) {
+        private bool Match(sws_TokenType tokenType) {
             if(AtEnd()) {
                 return false;
             }
@@ -1396,7 +1821,7 @@ namespace SWScript.compiler {
             return false;
         }
 
-        private static bool Match(sws_TokenType[] tokenTypes) {
+        private bool Match(sws_TokenType[] tokenTypes) {
             if (AtEnd()) {
                 return false;
             }
@@ -1407,60 +1832,40 @@ namespace SWScript.compiler {
             return false;
         }
 
-        private static sws_Token Last() {
-            if (current == 0) {
-                return sws_Token.Error();
+        private sws_Token Last() {
+            if (_current == 0) {
+                return sws_Token.Error(_lastToken);
             }
-            LastToken = Tokens[current - 1];
-            return LastToken;
+            _lastToken = _tokens[_current - 1];
+            return _lastToken;
         }
 
-        private static sws_Token Next() {
+        private sws_Token Next() {
             if(AtEnd()) {
-                return sws_Token.Error();
+                return sws_Token.Error(_lastToken);
             }
-            LastToken = Tokens[current++];
-            return LastToken;
+            _lastToken = _tokens[_current++];
+            return _lastToken;
         }
 
-        private static sws_Token Peek() {
-            if(AtEnd()) {
-                return sws_Token.Error();
+        private sws_Token Peek() {
+            if (AtEnd()) {
+                return sws_Token.Error(_lastToken);
             }
-            LastToken = Tokens[current];
-            return LastToken;
+            _lastToken = _tokens[_current];
+            return _lastToken;
         }
 
-        private static sws_Token Peek2() {
-            if (current + 1 >= Tokens.Count) {
-                return sws_Token.Error();
+        private sws_Token Peek2() {
+            if (_current + 1 >= _tokens.Count - 1) {
+                return sws_Token.Error(_lastToken);
             }
-            LastToken = Tokens[current + 1];
-            return LastToken;
+            _lastToken = _tokens[_current + 1];
+            return _lastToken;
         }
 
-        private static bool AtEnd() {
-            return current >= Tokens.Count;
-        }
-
-        /// <summary>
-        /// Skips tokens until reaching next decleration / statement.
-        /// </summary>
-        private static void Synchronize() {
-            while (!AtEnd()) {
-                switch (Peek().TokenType) {
-                    case keyword_if: return;
-                    case keyword_else: return;
-                    case keyword_else_if: return;
-                    case keyword_for: return;
-                    case keyword_while: return;
-                    case keyword_continue: return;
-                    case keyword_break: return;
-                    case keyword_func: return;
-                    case keyword_return: return;
-                }
-                Next();
-            }
+        private bool AtEnd() {
+            return _current >= _tokens.Count - 1;
         }
 
         /// <summary>
@@ -1468,11 +1873,497 @@ namespace SWScript.compiler {
         /// </summary>
         /// <param name="value"></param>
         /// <returns></returns>
-        private static bool ValidImmediateValue(sws_Expression value) {
+        private bool ValidImmediateValue(sws_Expression value) {
             return  value.Type == sws_ExpressionType.Literal &&                         //check value is literal
                     value.ValueType == sws_DataType.Double &&                           //check literal is number
                     (double)value.Value % 1 == 0 &&                                     //check number is integer
                     (double)value.Value >= -131071 && (double)value.Value <= 131071;    //check if range is between -2^17+1 and 2^17-1
+        }
+
+        //Originally part of sws_Prg, which was combined with this file
+
+        private void PushFrame(string name, bool declareAtStart) {
+            if (!_frames.ContainsKey(name)) {
+                _frames.Add(name, new sws_Frame(name));
+            }
+
+            if (name != string.Empty) {
+                _frame.Closures.Add(name);
+                AddVariable(name, sws_VariableType.Global);
+
+                AddInstruction(op_closure, AddConst(name, sws_DataType.String));
+                AddVarSetInstruction(name);
+
+                if (declareAtStart) {
+                    //move instructions to start of program
+                    for (int i = 0; i < 2; i++) {
+                        sws_Op instruction = LastInstruction();
+                        RemoveLastInstruction();
+                        AddInstructionToStart(instruction.Opcode, instruction.Data);
+                    }
+                }
+            }
+
+            _frame = _frames[name];
+
+            _frameStack.Push(_frame);
+        }
+
+        private void PushNoName() {
+            string name = _unnammedFuncCount.ToString();
+
+            _frames.Add(name, new sws_Frame(name));
+
+            _frame.Closures.Add(name);
+            AddVariable(name, sws_VariableType.Global);
+
+            AddInstruction(op_closure, AddConst(name, sws_DataType.String));
+            AddVarSetInstruction(name);
+
+            _frame = _frames[name];
+
+            _frameStack.Push(_frame);
+
+            _unnammedFuncCount++;
+        }
+
+        private void AddLuaClosure(string name) {
+            name = "lua " + name;
+
+            _frame.Closures.Add(name);
+            AddVariable(name, sws_VariableType.Global);
+
+            AddInstruction(op_closure, AddConst(name, sws_DataType.String));
+            AddVarSetInstruction(name);
+
+            //move instructions to start of program
+
+            for (int i = 0; i < 2; i++) {
+                sws_Op instruction = LastInstruction();
+                RemoveLastInstruction();
+                AddInstructionToStart(instruction.Opcode, instruction.Data);
+            }
+        }
+
+        private void PopFrame() {
+            if (_frameStack.Count == 1) {
+                throw new sws_ParserError(_lastToken, "Attempt to return from main.");
+            }
+
+            _frameStack.Pop();
+
+            _frame = _frameStack.Peek();
+        }
+
+        private int AddInstruction(sws_Opcode opcode, int data = int.MinValue) {
+            //Optimization: if opcode is op_add, check if one of two previous instructions is op_loadimm n, in which case it can be replaced with an op_addimm instruction.
+            if (opcode == op_add) {
+                sws_Op last = LastInstruction();
+                if (last != null && last.Opcode == op_loadimm) {
+                    int n = last.Data;
+                    RemoveLastInstruction();
+                    _frame.Program.Add(new sws_Op(op_addimm, n, Last().NLine));
+                    return GetPC();
+                }
+
+                sws_Op secondToLast = SecondToLastInstruction();
+                if (secondToLast != null && secondToLast.Opcode == op_loadimm) {
+                    int n = secondToLast.Data;
+                    RemoveSecondToLastInstruction();
+                    _frame.Program.Add(new sws_Op(op_addimm, n, Last().NLine));
+                    return GetPC();
+                }
+            }
+            //Optimization: op_concat can work on multiple values in a similar way to op_tableset, by specifying the number to concat in the operand. Check if previous instruction is op_concat, and increment it's operand's value by 1 instead of adding this one.
+            else if (opcode == op_concat) {
+                sws_Op last = LastInstruction();
+                if (last != null && last.Opcode == op_concat) {
+                    last.Data++; //technically this has an edge case if you somehow go over the 2^17-1 limit for the operand, but that's never gonna happen anyway, right?.
+                    return GetPC();
+                }
+            }
+
+            _frame.Program.Add(new sws_Op(opcode, data, Last().NLine));
+            return GetPC();
+        }
+
+        private void AddCallInstruction(int argCount, int expectedReturnCount) {
+            int data = (argCount & 0xFF) + ((expectedReturnCount & 0xFF) << 8);
+
+            // NOTE: only takes of 16 bits of 17 available.
+            if (argCount > 255) {
+                throw new sws_ParserError(_lastToken, "Number of arguments for function call exceeded 255.");
+            }
+
+            if (expectedReturnCount > 255) {
+                throw new sws_ParserError(_lastToken, "Number of values expected to be returned from function exceeded 255.");
+            }
+
+            AddInstruction(op_call, data);
+        }
+
+        private void InsertInstruction(int pc, sws_Opcode opcode, int data = int.MinValue) {
+            _frame.Program.Insert(pc, new sws_Op(opcode, data, Last().NLine));
+        }
+
+        private void AddInstructionToStart(sws_Opcode opcode, int data = int.MinValue) {
+            InsertInstruction(0, opcode, data);
+        }
+
+        public sws_Op LastInstruction() {
+            return _frame.Program.Last();
+        }
+
+        private sws_Op SecondToLastInstruction() {
+            if (_frame.Program.Count > 1) {
+                return _frame.Program[_frame.Program.Count - 2];
+            }
+            return null;
+        }
+
+        private void RemoveLastInstruction() {
+            if (_frame.Program.Any()) {
+                _frame.Program.RemoveAt(_frame.Program.Count - 1);
+            }
+        }
+
+        private void RemoveSecondToLastInstruction() {
+            if (_frame.Program.Count > 1) {
+                _frame.Program.RemoveAt(_frame.Program.Count - 2);
+            }
+        }
+
+        private void SetLocalScopeStart() {
+            for (int i = 0; i < _frame.Locals.Count; i++) {
+                sws_Variable local = _frame.Locals[i];
+                if (local.Depth == _depth && local.ScopeStart == -1) {
+                    local.ScopeStart = _frame.Program.Count;
+                }
+            }
+        }
+
+        private void SetLocalScopeEnd() {
+            for (int i = 0; i < _frame.Locals.Count; i++) {
+                sws_Variable local = _frame.Locals[i];
+                if (local.Depth == _depth && local.ScopeEnd == -1) {
+                    local.ScopeEnd = _frame.Program.Count;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Adds a variable as either a local, upvalue, or global so it's index can later be retrieved.
+        /// </summary>
+        /// <param name="name"></param>
+        /// <param name="forceType">If sws_VariableType.Constant is entered a variable type will not be forced.</param>
+        private void AddVariable(string name, sws_VariableType forceType = sws_VariableType.Constant) {
+            if (forceType == sws_VariableType.Global) {
+                sws_Variable variable = GetGlobal(name);
+                if (variable == null) {
+                    _globals.Add(new sws_Variable().Global(name, _globals.Count));
+                }
+                return;
+            }
+
+            //force variable to be local
+            if (forceType == sws_VariableType.Local) {
+                sws_Variable local = GetLocal(name);
+
+                if (local == null) {
+                    _frame.Locals.Add(new sws_Variable().Local(name, _frame.Locals.Count, -1, _depth));
+                    return;
+                }
+
+                throw new sws_ParserError(_lastToken, $"Local variable '{name}' already exists in scope.");
+            } else {
+                //if variable being local is not forced, still check and return if it exists as a local. If it doesn't continue.
+                if (GetLocal(name) != null) {
+                    return;
+                }
+            }
+
+            //search for locals in functions under this one in depth which match in name. If a match is found the variable is added as an upvalue.
+            sws_Variable upvalue = GetUpvalue(name);
+            if (upvalue == null) {
+                sws_Frame[] framesArray = _frameStack.ToArray(); //has to be reversed because making a copy of the stack reverses it.
+                Stack<sws_Frame> frames = new Stack<sws_Frame>(framesArray.Reverse());
+                frames.Pop();
+                while (frames.Count > 0) {
+                    sws_Frame frame = frames.Pop();
+                    int localIndex = frame.GetLocal(name);
+                    if (localIndex != -1) {
+                        _frame.Upvalues.Add(new sws_Variable().Upvalue(name, _frame.Upvalues.Count, frame.Name, localIndex));
+                        return;
+                    }
+                }
+            } else {
+                //if upvalue was found return, otherwise global variable will be added.
+                return;
+            }
+
+            //if searching for upvalues fails, add the variable as a global.
+            sws_Variable global = GetGlobal(name);
+            if (global == null) {
+                _globals.Add(new sws_Variable().Global(name, _globals.Count));
+            }
+        }
+
+        private int AddConst(object value, sws_DataType dataType) {
+            int index = GetConst(value, dataType);
+
+            if (index == -1) {
+                index = _constants.Count;
+                _constants.Add(new sws_Variable().Constant(value, dataType, index));
+            }
+
+            return index;
+        }
+
+        /// <summary>
+        /// Adds instruction to get variable with given name.
+        /// </summary>
+        /// <param name="name"></param>
+        private void AddVarGetInstruction(string name) {
+            sws_Variable variable = GetVariable(name);
+
+            //if variable doesn't exist assume it's a global
+            if (variable == null) {
+                variable = new sws_Variable().Global(name, _globals.Count);
+                _globals.Add(variable);
+                AddInstruction(op_getglobal, variable.Index);
+                return;
+            }
+
+            if (variable.VariableType == sws_VariableType.Local) {
+                AddInstruction(op_getlocal, variable.Index);
+                return;
+            }
+
+            if (variable.VariableType == sws_VariableType.Upvalue) {
+                AddInstruction(op_getupval, variable.Index);
+                return;
+            }
+
+            if (variable.VariableType == sws_VariableType.Global) {
+                AddInstruction(op_getglobal, variable.Index);
+                return;
+            }
+        }
+
+        /// <summary>
+        /// Adds instruction to set variable with given name.
+        /// </summary>
+        /// <param name="name"></param>
+        private void AddVarSetInstruction(string name) {
+            sws_Variable variable = GetVariable(name);
+
+            //if variable doesn't exist assume it's a global
+            if (variable == null) {
+                variable = new sws_Variable().Global(name, _globals.Count);
+                _globals.Add(variable);
+                AddInstruction(op_setglobal, variable.Index);
+                return;
+            }
+
+            if (variable.VariableType == sws_VariableType.Local) {
+                AddInstruction(op_setlocal, variable.Index);
+                return;
+            }
+
+            if (variable.VariableType == sws_VariableType.Upvalue) {
+                AddInstruction(op_setupval, variable.Index);
+                return;
+            }
+
+            if (variable.VariableType == sws_VariableType.Global) {
+                AddInstruction(op_setglobal, variable.Index);
+                return;
+            }
+        }
+
+        /// <summary>
+        /// Get variable with given name. Priority is given to locals, than upvalues, than globals
+        /// </summary>
+        /// <param name="name"></param>
+        /// <returns></returns>
+        private sws_Variable GetVariable(string name) {
+            sws_Variable variable = GetLocal(name);
+            if (variable != null) {
+                return variable;
+            }
+
+            variable = GetUpvalue(name);
+            if (variable != null) {
+                return variable;
+            }
+
+            variable = GetGlobal(name);
+            if (variable != null) {
+                return variable;
+            }
+
+            return null;
+        }
+
+        private int GetConst(object value, sws_DataType dataType) {
+            for (int i = 0; i < _constants.Count; i++) {
+                sws_Variable constant = _constants[i];
+
+                if (constant.ValueType != dataType) {
+                    continue;
+                }
+
+                switch (constant.ValueType) {
+                    case sws_DataType.Null:
+                        return i;
+                    case sws_DataType.Bool:
+                        if ((bool)value == (bool)constant.Value) {
+                            return i;
+                        }
+                        break;
+                    case sws_DataType.Double:
+                        if ((double)value == (double)constant.Value) {
+                            return i;
+                        }
+                        break;
+                    case sws_DataType.String:
+                        if (value.ToString() == constant.Value.ToString()) {
+                            return i;
+                        }
+                        break;
+                }
+            }
+            return -1;
+        }
+
+        private sws_Variable GetLocal(string name) {
+            for (int i = 0; i < _frame.Locals.Count; i++) {
+                sws_Variable local = _frame.Locals[i];
+                //ScopeEnd being -1 means the variable is inside the scope of where the parser is currently.
+                if (local.ScopeEnd == -1 && name == local.Name) {
+                    return local;
+                }
+            }
+
+            return null;
+        }
+
+        private sws_Variable GetUpvalue(string name) {
+            for (int i = 0; i < _frame.Upvalues.Count; i++) {
+                if (name == _frame.Upvalues[i].Name) {
+                    return _frame.Upvalues[i];
+                }
+            }
+
+            //if it doesn't exist, search for upvalue and add it if found.
+            sws_Frame[] framesArray = _frameStack.ToArray(); //has to be reversed because making a copy of the stack reverses it.
+            Stack<sws_Frame> frames = new Stack<sws_Frame>(framesArray.Reverse());
+            frames.Pop();
+            while (frames.Count > 0) {
+                sws_Frame frame = frames.Pop();
+                int localIndex = frame.GetLocal(name);
+                if (localIndex != -1) {
+                    _frame.Upvalues.Add(new sws_Variable().Upvalue(name, _frame.Upvalues.Count, frame.Name, localIndex));
+                    return _frame.Upvalues.Last();
+                }
+            }
+
+            return null;
+        }
+
+        private sws_Variable GetGlobal(string name) {
+            for (int i = 0; i < _globals.Count; i++) {
+                if (name == _globals[i].Name) {
+                    return _globals[i];
+                }
+            }
+
+            return null;
+        }
+
+        private int GetPC() {
+            return _frame.Program.Count - 1;
+        }
+
+        private void ResolveJumpFlag(int flag, int offset = 0) {
+            for (int i = 0; i < _frame.Program.Count; i++) {
+                sws_Op instruction = _frame.Program[i];
+
+                if (instruction.Data == flag) {
+                    instruction.Data = _frame.Program.Count - i - 1 + offset;
+                }
+            }
+        }
+
+        private void ResolveJumpPcCustomDest(int pc, int destPC) {
+            _frame.Program[pc].Data = destPC - pc;
+        }
+
+        private void ResolveJumpPC(int pc) {
+            _frame.Program[pc].Data = _frame.Program.Count - pc - 1;
+        }
+
+        private void ResolveJumpPCs(List<int> pcs, int offset = 0) {
+            for (int i = 0; i < pcs.Count; i++) {
+                ResolveJumpPC(pcs[i] + offset);
+            }
+        }
+
+        /// <summary>
+        /// Optimizes when instructions such as op_eq and op_jfalse follow eachother into a single instruction.
+        /// </summary>
+        /// <param name="flag"></param>
+        private void AddJumpFInstruction(int flag) {
+            sws_Opcode last = LastInstruction().Opcode;
+            switch (last) {
+                case op_eq:
+                    RemoveLastInstruction();
+                    AddInstruction(op_jneq, flag);
+                    break;
+                case op_neq:
+                    RemoveLastInstruction();
+                    AddInstruction(op_jeq, flag);
+                    break;
+                case op_lt:
+                    RemoveLastInstruction();
+                    AddInstruction(op_jgte, flag);
+                    break;
+                case op_lte:
+                    RemoveLastInstruction();
+                    AddInstruction(op_jgt, flag);
+                    break;
+                default:
+                    AddInstruction(op_jfalse, flag);
+                    break;
+            }
+        }
+
+        private bool JumpFCanSimplify() {
+            return Array.IndexOf(new sws_Opcode[] { op_eq, op_neq, op_lt, op_lte }, LastInstruction().Opcode) != -1;
+        }
+
+        private void ResolveContinueBreakLoop(List<int> instructionIndices, int continuePC, int breakPC) {
+            for (int i = 0; i < instructionIndices.Count; i++) {
+                int pc = instructionIndices[i];
+                sws_Op instruction = _frame.Program[pc];
+
+                if (instruction.Data == JMP_CONTINUE) {
+                    instruction.Data = continuePC - pc;
+                } else if (instruction.Data == JMP_BREAK) {
+                    instruction.Data = breakPC - pc;
+                }
+            }
+        }
+
+        private void ResolveIfEnd(List<int> instructionIndices, int endPC) {
+            for (int i = 0; i < instructionIndices.Count; i++) {
+                int pc = instructionIndices[i];
+                sws_Op instruction = _frame.Program[pc];
+
+                if (instruction.Data == JMP_IFEND) {
+                    instruction.Data = endPC - pc;
+                }
+            }
         }
     }
 }

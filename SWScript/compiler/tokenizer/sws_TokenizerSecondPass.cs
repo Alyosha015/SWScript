@@ -5,32 +5,37 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-using static SWScript.compiler.sws_Compiler;
-using static SWScript.compiler.sws_TokenType;
+using static SWS.Compiler.sws_TokenType;
 
-namespace SWScript.compiler {
+namespace SWS.Compiler {
     internal class sws_TokenizerSecondPass {
-        private static int Line = 1;
-        private static int Column = 0;
-        private static int Current = 0;
+        private List<sws_Token> _firstPassTokens;
+        private List<sws_Token> _tokens;
 
-        public static void Tokenize() {
-            Line = 1;
-            Column = 0;
-            Current = 0;
+        private int _line = 1;
+        private int _column = 0;
+        private int _current = 0;
 
-            Tokens = new List<sws_Token>();
+        public List<sws_Token> Tokenize(List<sws_Token> firstPassTokens) {
+            _firstPassTokens = firstPassTokens;
+            _tokens = new List<sws_Token>();
+
+            _line = 1;
+            _column = 0;
+            _current = 0;
 
             while (!AtEnd()) {
                 NextToken();
             }
+
+            return _tokens;
         }
 
-        private static void NextToken() {
+        private void NextToken() {
             sws_Token t = Next();
 
-            Line = t.NLine;
-            Column = t.NColumn;
+            _line = t.NLine;
+            _column = t.NColumn;
 
             switch (t.TokenType) {
                 case punctuation_number_sign:
@@ -40,14 +45,14 @@ namespace SWScript.compiler {
                     if (Peek().TokenType == punctuation_greater_than) {
                         if (Peek2().TokenType == punctuation_equals_sign) {
                             AddToken(operator_bitshiftright_assign);
-                            Current += 2;
+                            _current += 2;
                         } else {
                             AddToken(operator_bitshiftright);
-                            Current++;
+                            _current++;
                         }
                     } else if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_gte);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(operator_gt);
                     }
@@ -56,14 +61,14 @@ namespace SWScript.compiler {
                     if (Peek().TokenType == punctuation_less_than) {
                         if (Peek2().TokenType == punctuation_equals_sign) {
                             AddToken(operator_bitshiftleft_assign);
-                            Current += 2;
+                            _current += 2;
                         } else {
                             AddToken(operator_bitshiftleft);
-                            Current++;
+                            _current++;
                         }
                     } else if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_lte);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(operator_lt);
                     }
@@ -71,7 +76,7 @@ namespace SWScript.compiler {
                 case punctuation_equals_sign:
                     if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_eq);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(operator_assign);
                     }
@@ -79,10 +84,10 @@ namespace SWScript.compiler {
                 case punctuation_plus:
                     if (Peek().TokenType == punctuation_plus) {
                         AddToken(punctuation_doubleplus);
-                        Current++;
+                        _current++;
                     } else if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_add_assign);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(operator_add);
                     }
@@ -91,11 +96,11 @@ namespace SWScript.compiler {
                     //negative numbers
                     if (Peek().TokenType == punctuation_minus) {
                         AddToken(punctuation_doubleminus);
-                        Current++;
+                        _current++;
                     } else if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_sub_assign);
-                        Current++;
-                    } else if (Array.IndexOf(new sws_TokenType[] { identifier, literal_number, punctuation_parenthesis_closed, punctuation_brackets_closed }, Last().TokenType) != -1 || Array.IndexOf(new sws_TokenType[] { punctuation_doubleplus, punctuation_doubleminus }, Tokens.Last().TokenType) != -1) { //checks if previous token is something that could be subtracted from
+                        _current++;
+                    } else if (Array.IndexOf(new sws_TokenType[] { identifier, literal_number, punctuation_parenthesis_closed, punctuation_brackets_closed }, Last().TokenType) != -1 || Array.IndexOf(new sws_TokenType[] { punctuation_doubleplus, punctuation_doubleminus }, _tokens.Last().TokenType) != -1) { //checks if previous token is something that could be subtracted from
                         AddToken(operator_sub);
                     } else {
                         AddToken(operator_minus);
@@ -105,14 +110,14 @@ namespace SWScript.compiler {
                     if (Peek().TokenType == punctuation_asterisk) {
                         if (Peek2().TokenType == punctuation_equals_sign) {
                             AddToken(operator_pow_assign);
-                            Current += 2;
+                            _current += 2;
                         } else {
                             AddToken(operator_pow);
-                            Current++;
+                            _current++;
                         }
                     } else if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_mul_assign);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(operator_mul);
                     }
@@ -121,14 +126,14 @@ namespace SWScript.compiler {
                     if(Peek().TokenType == punctuation_slash) {
                         if (Peek2().TokenType == punctuation_equals_sign) {
                             AddToken(operator_floordiv_assign);
-                            Current += 2;
+                            _current += 2;
                         } else {
                             AddToken(operator_floordiv);
-                            Current++;
+                            _current++;
                         }
                     } else if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_div_assign);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(operator_div);
                     }
@@ -136,7 +141,7 @@ namespace SWScript.compiler {
                 case punctuation_percent_sign:
                     if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_mod_assign);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(operator_mod);
                     }
@@ -145,14 +150,14 @@ namespace SWScript.compiler {
                     if (Peek().TokenType == punctuation_ampersand) {
                         if (Peek2().TokenType == punctuation_equals_sign) {
                             AddToken(operator_booland_assign);
-                            Current += 2;
+                            _current += 2;
                         } else {
                             AddToken(operator_booland);
-                            Current++;
+                            _current++;
                         }
                     } else if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_bitand_assign);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(operator_bitand);
                     }
@@ -160,7 +165,7 @@ namespace SWScript.compiler {
                 case punctuation_caret:
                     if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_bitxor_assign);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(operator_bitxor);
                     }
@@ -172,14 +177,14 @@ namespace SWScript.compiler {
                     if (Peek().TokenType == punctuation_vertical_bar) {
                         if (Peek2().TokenType == punctuation_equals_sign) {
                             AddToken(operator_boolor_assign);
-                            Current += 2;
+                            _current += 2;
                         } else {
                             AddToken(operator_boolor);
-                            Current++;
+                            _current++;
                         }
                     } else if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_bitor_assign);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(operator_bitor);
                     }
@@ -187,59 +192,64 @@ namespace SWScript.compiler {
                 case punctuation_exclamation_mark:
                     if (Peek().TokenType == punctuation_equals_sign) {
                         AddToken(operator_neq);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(operator_boolnot);
                     }
                     break;
                 case punctuation_dollar_sign:
-                    AddToken(operator_concat);
+                    if(Peek().TokenType == punctuation_equals_sign) {
+                        AddToken(operator_concat_assign);
+                        _current++;
+                    } else {
+                        AddToken(operator_concat);
+                    }
                     break;
                 case keyword_else:
                     if (Peek().TokenType == keyword_if) {
                         AddToken(keyword_else_if);
-                        Current++;
+                        _current++;
                     } else {
                         AddToken(keyword_else);
                     }
                     break;
                 default:
-                    Tokens.Add(t);
+                    _tokens.Add(t);
                     break;
             }
         }
 
-        private static void AddToken(sws_TokenType tokenType) {
-            Tokens.Add(new sws_Token(tokenType, Line, Column));
+        private void AddToken(sws_TokenType tokenType) {
+            _tokens.Add(new sws_Token(tokenType, _line, _column));
         }
 
-        private static sws_Token Next() {
-            return FirstPassTokens[Current++];
+        private sws_Token Next() {
+            return _firstPassTokens[_current++];
         }
 
-        private static sws_Token Last() {
-            if (Current - 2 < 0) {
+        private sws_Token Last() {
+            if (_current - 2 < 0) {
                 return sws_Token.Error();
             }
-            return FirstPassTokens[Current - 2];
+            return _firstPassTokens[_current - 2];
         }
 
-        private static sws_Token Peek() {
+        private sws_Token Peek() {
             if (AtEnd()) {
                 return sws_Token.Error();
             }
-            return FirstPassTokens[Current];
+            return _firstPassTokens[_current];
         }
 
-        private static sws_Token Peek2() {
-            if (Current + 1 >= FirstPassTokens.Count) {
+        private sws_Token Peek2() {
+            if (_current + 1 >= _firstPassTokens.Count) {
                 return sws_Token.Error();
             }
-            return FirstPassTokens[Current + 1];
+            return _firstPassTokens[_current + 1];
         }
 
-        private static bool AtEnd() {
-            return Current >= FirstPassTokens.Count;
+        private bool AtEnd() {
+            return _current >= _firstPassTokens.Count;
         }
     }
 }

@@ -4,31 +4,31 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-using static SWScript.compiler.sws_Opcode;
+using static SWS.Compiler.sws_Opcode;
 
-namespace SWScript.compiler {
+namespace SWS.Compiler {
     /// <summary>
     /// Opcodes used by SWScript bytecode. These are arranged in groups for clarity. However the actual number codes for the opcodes are grouped differently, they are loosely based on number of arguments needed (for example 0-20 all need to pop two values off the stack). This is done because it lets me make the lua interpreter use less characters.
     /// 
     ///  0-21 pop 2 values. 0-17 also push 1 value.
-    /// 22-36 pop 1 value.  31-44 also push 1 value.
-    /// 37-48 don't pop values.
-    /// 49-51 vary.
+    /// 22-37 pop 1 value.  32-45 also push 1 value.
+    /// 38-49 don't pop values.
+    /// 50-52 vary.
     /// 
     /// </summary>
-    internal enum sws_Opcode {
-        op_getconst = 37,
-        op_getlocal = 38,
-        op_getupval = 39,
-        op_getglobal = 40,
+    public enum sws_Opcode {
+        op_getconst = 38,
+        op_getlocal = 39,
+        op_getupval = 40,
+        op_getglobal = 41,
         op_setlocal = 22,
         op_setupval = 23,
         op_setglobal = 24,
         op_dup = 25,
 
-        op_loadimm = 41,
-        op_loadbool = 42,
-        op_loadnull = 43,
+        op_loadimm = 42,
+        op_loadbool = 43,
+        op_loadnull = 44,
 
         op_add = 0,
         op_sub = 1,
@@ -43,11 +43,11 @@ namespace SWScript.compiler {
         op_bitshiftleft = 10,
         op_bitshiftright = 11,
 
-        op_addimm = 45, //special case to pop no value rule, instead modify value on stack
-        op_minus = 31,
-        op_boolnot = 32,
-        op_bitnot = 33,
-        op_len = 34,
+        op_addimm = 46, //special case to pop no value rule, instead modify value on stack
+        op_minus = 32,
+        op_boolnot = 33,
+        op_bitnot = 34,
+        op_len = 35,
 
         op_concat = 12,
 
@@ -56,7 +56,8 @@ namespace SWScript.compiler {
         op_lt = 15,
         op_lte = 16,
 
-        op_jmp = 46,
+        op_jmp = 47,
+        op_jindexed = 31,
         op_jeq = 18,
         op_jneq = 19,
         op_jgt = 20,
@@ -66,34 +67,34 @@ namespace SWScript.compiler {
         op_jfnp = 28,
         op_jtnp = 29,
 
-        op_tablenew = 44,
-        op_tableset = 49,
+        op_tablenew = 45,
+        op_tableset = 50,
         op_tableget = 17,
-        op_tablekeys = 35,
+        op_tablekeys = 36,
 
-        op_closure = 47,
-        op_call = 50,
-        op_return = 51,
+        op_closure = 48,
+        op_call = 51,
+        op_return = 52,
 
-        op_halt = 48,
+        op_halt = 49,
         op_print = 30,
-        op_type = 36,
+        op_type = 37,
     }
     
-    internal class sws_Op {
+    public class sws_Op {
         public sws_Opcode Opcode;
         public int Data;
 
         public int Line;
 
-        public sws_Op(sws_Opcode opcode, int data) {
+        public sws_Op(sws_Opcode opcode, int data, int line) {
             Opcode = opcode;
             Data = data;
-            Line = sws_Parser.LastToken.NLine;
+            Line = line;
         }
 
         public bool IsJumpOp() {
-            return Opcode == op_jmp || Opcode == op_jeq || Opcode == op_jneq || Opcode == op_jgt || Opcode == op_jgte || Opcode == op_jfalse || Opcode == op_jtrue || Opcode == op_jfnp || Opcode == op_jtnp;
+            return Opcode == op_jmp || Opcode == op_jindexed || Opcode == op_jeq || Opcode == op_jneq || Opcode == op_jgt || Opcode == op_jgte || Opcode == op_jfalse || Opcode == op_jtrue || Opcode == op_jfnp || Opcode == op_jtnp;
         }
 
         public bool IsDataOp() { //excludes op_loadxxxx instructions

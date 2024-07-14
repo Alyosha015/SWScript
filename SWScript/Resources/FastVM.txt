@@ -1,0 +1,586 @@
+local TRUE, FALSE, NULL, ONTICK, ONDRAW, SWS = true, false, nil, "onTick", "onDraw", "SWS"
+
+local temp1, temp2, Current, Frames, Frame, halt, start, onTickRan, Stack, CallStack, sp, csp, Globals, Constants, hasOnTick, hasOnDraw, ProgramHex, ProgramStr, toNum, toStr, strChar, name = 0, 0, property.getNumber(SWS), {}, {}, FALSE, FALSE, FALSE, {}, {}, 0, 0, {}, {}, FALSE, FALSE, "", "", tonumber, tostring, string.char, ""
+
+local logInstructionFreq, logCallFreq = FALSE, FALSE
+local instructionStats, callStats = {}, {}
+
+--frameDebugData is indexed by frame name, same as 'Frames'
+--[[ frameDebugData format
+ 1: (string) name of frame.
+ 2: (table) stores line of code corresponding to each bytecode instruction.
+ 3: (table) stores local variable names.
+ 4: (table) stores upvalue variable names.
+]]
+--globalVarNames stores each global variable's name.
+--sourceCode stores the lines of code separately.
+local hasDebugData, frameDebugData, globalVarNames, sourceCode = FALSE, {}, {}, {}
+
+--[[ stack trace format
+ 1: (string) Calling function name
+ 2: (number) Line of code call came from.
+]]
+local stackTrace = {}
+
+local opcodes = {
+    [0]="op_add",
+    "op_sub",
+    "op_mul",
+    "op_div",
+    "op_floordiv",
+    "op_pow",
+    "op_mod",
+    "op_bitand",
+    "op_bitor",
+    "op_bitxor",
+    "op_bitshiftleft",
+    "op_bitshiftright",
+    "op_concat",
+    "op_eq",
+    "op_neq",
+    "op_lt",
+    "op_lte",
+    "op_tableget",
+    "op_jeq",
+    "op_jneq",
+    "op_jgt",
+    "op_jgte",
+    "op_setlocal",
+    "op_setupval",
+    "op_setglobal",
+    "op_dup",
+    "op_jfalse",
+    "op_jtrue",
+    "op_jfnp",
+    "op_jtnp",
+    "op_print",
+    "op_jindexed",
+    "op_minus",
+    "op_boolnot",
+    "op_bitnot",
+    "op_len",
+    "op_tablekeys",
+    "op_type",
+    "op_getconst",
+    "op_getlocal",
+    "op_getupval",
+    "op_getglobal",
+    "op_loadimm",
+    "op_loadbool",
+    "op_loadnull",
+    "op_tablenew",
+    "op_addimm",
+    "op_jmp",
+    "op_closure",
+    "op_halt",
+    "op_tableset",
+    "op_call",
+    "op_return",
+}
+
+--#region * * * * Program Loader * * * *
+for i=1, Current do
+    ProgramHex=ProgramHex..property.getText(SWS..i)
+end
+
+Current=1
+
+for i=1, #ProgramHex, 2 do
+    ProgramStr=ProgramStr..strChar(toNum(ProgramHex:sub(i,i+1),16))
+end
+
+function NextStr(out, index)
+    index = ProgramStr:sub(Current):find(strChar(1))
+    if index then
+        out=ProgramStr:sub(Current, Current+index-2)
+        Current=Current+index
+        return out
+    end
+end
+
+function NextInt()
+    return toNum(NextStr())
+end
+
+function NextValue(valueType,temp,out)
+    valueType=NextInt()
+    out=NextStr()
+    if valueType<1 then out=NULL
+    elseif valueType==1 then out=out==SWS
+    elseif valueType==2 then out=toNum(out)
+    elseif valueType==4 then
+        temp={}
+        out=toNum(out)
+        for i=1, out do
+            temp[NextValue()]=NextValue()
+        end
+        out=temp
+    end
+    return out
+end
+
+--number of stack frames
+temp1=NextInt()
+
+for i=1, temp1 do
+    Frame = {"",{},{},{},{},FALSE,1,{},0,0}
+
+    --stack frame name
+    Frame[1]=NextStr()
+
+    --number of instructions
+    temp2=NextInt()
+    for j=1, temp2 do
+        Frame[2][j]=NextInt()
+    end
+
+    --number of local variables
+    Frame[9]=NextInt()
+
+    --number of upvalues
+    temp2=NextInt()
+    for j=0, temp2-1 do
+        Frame[4][j]=NextStr()
+        Frame[5][j]=NextInt()
+    end
+
+    Frames[Frame[1]]=Frame
+end
+
+--skip number of global variables
+NextStr()
+
+temp1=NextInt() --number of constants
+for i=0,temp1-1 do
+    Constants[i]=NextValue()
+end
+
+--stat logging flags (not done by minimized vm)
+temp1 = NextInt()
+logInstructionFreq = (temp1&1)>0
+logCallFreq = (temp1&2)>0
+
+if logInstructionFreq then
+    for i=0,#opcodes do
+        instructionStats[i] = 0 --indexed by opcode
+    end
+end
+
+if logCallFreq then
+    for k,v in pairs(Frames) do
+        callStats[k]=0 --indexed by function name
+    end
+end
+
+hasOnTick=NULL~=Frames[ONTICK]
+hasOnDraw=NULL~=Frames[ONDRAW]
+onTickRan=not hasOnTick
+--#endregion
+--#region * * * * Debug Data Loader * * * *
+--checks if there is there's data after the program.
+hasDebugData = Current - 1 ~= #ProgramStr
+
+if hasDebugData then
+    --number of lines of code
+    temp1=NextInt()
+
+    for i=1, temp1 do
+        sourceCode[i]=NextStr()
+    end
+
+    --number of stack frames
+    temp1=NextInt()
+
+    for i=1, temp1 do
+        Frame = {"",{},{},{}}
+
+        Frame[1]=NextStr()--frame name
+
+        --number of instructions
+        temp2=NextInt()
+        for j=1, temp2 do
+            Frame[2][j]=NextInt()
+        end
+
+        --number of local variables
+        temp2=NextInt()
+        for j=0, temp2-1 do
+            Frame[3][j]=NextStr()
+        end
+
+        --number of upvalues
+        temp2=NextInt()
+        for j=0, temp2-1 do
+            Frame[4][j]=NextStr()
+        end
+
+        frameDebugData[Frame[1]]=Frame
+    end
+
+    --number of global variables
+    temp1=NextInt()
+    for i=1, temp1 do
+        globalVarNames[i]=NextStr()
+    end
+end
+
+--#endregion
+--#region * * * * VM Util Functions * * * *
+
+function CopyFrame(frame, keepLocalRef, out)
+    --shallow copy of frame
+    out={}
+    for i=1,10 do
+        out[i]=frame[i]
+    end
+
+    --copy local variables
+    if not keepLocalRef then
+        out[3]={}
+        for i=0, frame[9] do
+            out[3][i]=frame[3][i]
+        end
+    end
+
+    return out
+end
+
+--#endregion
+--#region * * * * VM * * * *
+
+function Execute(calledFromOnTick, pc, instruction)
+    --controls which function execution is started from. First tick the main body runs (technically from onTick), then the first execution from onDraw is skipped (which is what onTickRan is for), then onTick/onDraw begins running normally.
+    if not start then
+        start = TRUE
+    elseif calledFromOnTick and hasOnTick then
+        onTickRan = TRUE
+        name = ONTICK
+    elseif not calledFromOnTick and hasOnDraw and onTickRan then
+        name = ONDRAW
+    else
+        return
+    end
+
+    halt = FALSE
+
+    Frame = CopyFrame(Frames[name])
+
+    --loads upvalues from onTick and onDraw.
+    if name ~= "" then
+        stackTrace={{Frame[1], -1}} --log that execution began from this function
+
+        CallStack[1]=CopyFrame(Frame)
+        for k=0,#Frame[4]do
+            if Frame[4][k]==CallStack[0][1]then
+                Frame[8][k]=CallStack[0][3]
+            end
+        end
+    else
+        CallStack[0]=CopyFrame(Frame)
+    end
+
+    while 1 do
+        pc = 1+Frame[7]
+        instruction = Frame[2][pc-1]
+        local op, data, a, b, c = instruction>>18, instruction&131071
+
+        if(instruction&131072)>0 then
+            data=-data
+        end
+
+        --many instruction need 2 arguments or 1 argument, I've grouped them by opcode so that I could load data from the stack here
+        if op<22 then
+            sp=sp-2
+            a, b = Stack[sp+1], Stack[sp]
+        elseif op<38 then
+            sp=sp-1
+            a=Stack[sp]
+        end
+
+        if logInstructionFreq then
+            instructionStats[op]=instructionStats[op]+1
+        end
+
+        --instructions here are grouped ordered by how often they are likely to be called, something like op_loadlocal can make up to 40% of instructions running depending on the code, and because I had to use an elseif chain position matters.
+        if op==39 then c=Frame[3][data]
+        elseif op==40 then c=Frame[8][data][Frame[5][data]]
+        elseif op==41 then c=Globals[data]
+        elseif op==22 then Frame[3][data]=a
+        elseif op==23 then Frame[8][data][Frame[5][data]]=a
+        elseif op==24 then Globals[data]=a
+        elseif op==46 then Stack[sp-1]=data+Stack[sp-1]
+        elseif op==42 then c=data
+        elseif op==38 then c=Constants[data]
+        elseif op==0 then c=a+b
+        elseif op==1 then c=a-b
+        elseif op==2 then c=a*b
+        elseif op==3 then c=a/b
+        elseif op==13 then c=a==b
+        elseif op==14 then c=a~=b
+        elseif op==15 then c=a<b
+        elseif op==16 then c=a<=b
+        elseif op==17 then c=b[a]
+        elseif op==47 then pc=pc+data
+        elseif op==31 then pc=pc+data+a
+        elseif op==18 then pc=pc+(a==b and data or 0)
+        elseif op==19 then pc=pc+(a~=b and data or 0)
+        elseif op==20 then pc=pc+(a>b and data or 0)
+        elseif op==21 then pc=pc+(a>=b and data or 0)
+        elseif op==26 then pc=pc+(a and 0 or data)
+        elseif op==27 then pc=pc+(a and data or 0)
+        elseif op==28 then if not a then pc=pc+data sp=sp+1 end
+        elseif op==29 then if a then pc=pc+data sp=sp+1 end
+        elseif op==50 then sp=sp-1 temp1=Stack[sp] for j=1,instruction&131071 do sp=sp-2 temp1[Stack[sp+1]]=Stack[sp]end if (instruction&131072)>0 then Stack[sp]=temp1 sp=sp+1 end
+        elseif op==43 then c=data>0
+        elseif op==32 then c=-a
+        elseif op==33 then c=not a
+        elseif op==36 then c={}for k,v in pairs(a)do c[#c+1]=k end
+        elseif op==37 then c=type(a)
+        elseif op==35 then c=#a
+        elseif op==51 then
+            sp=sp-1
+            c=type(Stack[sp])=="function" --true if lua function
+            local out,luaCallArguments,argumentCount,returnCount,closure={},{},data&255,(data&65280)>>8
+
+            if not c then
+                closure=CopyFrame(Stack[sp])
+                closure[10]=returnCount
+            end
+
+            if logCallFreq and not c then
+                if not callStats[closure[1]] then
+                    callStats[closure[1]]=0
+                end
+                callStats[closure[1]]=callStats[closure[1]]+1
+            end
+
+            --lua function calls / sws lua calls
+            --there are weirdly two types of lua function calls, one is when syntax like 'lua.input.getNumber' is used, a sws lua call, and one where a lua function returned by a function like gmatch is returned.
+            if c or closure[6] then
+                for j=1, argumentCount do
+                    sp=sp-1
+                    luaCallArguments[j] = Stack[sp]
+                end
+
+                out = table.pack((c and Stack[sp] or closure[2])(table.unpack(luaCallArguments)))
+
+                for j=1, returnCount do
+                    Stack[sp]=out[j]
+                    sp=sp+1
+                end
+            else --sws function calls
+                for j=0, argumentCount-1 do
+                    sp=sp-1
+                    closure[3][j]=Stack[sp]
+                end
+
+                pc=1
+                CallStack[csp]=CopyFrame(Frame, TRUE)
+                csp=csp+1
+
+                Frame=closure
+            end
+        elseif op==4 then c=a//b
+        elseif op==5 then c=a^b
+        elseif op==6 then c=a%b
+        elseif op==34 then c=~a
+        elseif op==7 then c=a&b
+        elseif op==8 then c=a|b
+        elseif op==9 then c=a~b
+        elseif op==10 then c=a<<b
+        elseif op==11 then c=a>>b
+        elseif op==12 then c=toStr(a)..toStr(b)for j=1,data do sp=sp-1 c=c..toStr(Stack[sp])end
+        elseif op==52 then
+            csp=csp-1
+            halt=csp==1 and(hasOnTick or hasOnDraw)and name~=""
+            if 1>Frame[10] then
+                sp=sp-data
+            end
+            for j=data+1, Frame[10]do
+                Stack[sp]=NULL
+                sp=sp+1
+            end
+            Frame=CopyFrame(CallStack[csp], TRUE)
+            pc=1+Frame[7]
+        elseif op==45 then c={}
+        elseif op==44 then c=NULL
+        elseif op==25 then Stack[sp], Stack[sp+1] = a, a sp=sp+2
+        elseif op==30 then if data==0 then PRINTLN(a) elseif data==1 then PRINT(a) end
+        elseif op==48 then
+            local closureName,luaFunc,closure=Constants[data],_ENV,{}
+            closure[1]=closureName
+            closure[3]={}
+            closure[6]=NULL~=closureName:find("lua ", 1, TRUE) --store if it's a lua function
+
+            if closure[6]then
+                closureName=closureName:gmatch("%S+")
+                closureName() --skip 'lua '
+
+                for v in closureName do
+                    luaFunc=luaFunc[v]
+                end
+
+                closure[2]=luaFunc
+                closure[9]=0
+            else
+                closure=CopyFrame(Frames[closureName])
+
+                CallStack[csp]=CopyFrame(Frame, TRUE)
+
+                --checks if any functions on call stack share name with functions closure has upvalues, if it does save reference to that stack frames local variables so they can be accessed/modifed later. Starts from bottom to make sure 'nearest' function gets its reference saved, since if recursion happens there can be multiple of one function on the callstack.
+                for j=0,csp do
+                    for k=0,#closure[4]do
+                        if closure[4][k]==CallStack[j][1]then
+                            closure[8][k]=CallStack[j][3]
+                        end
+                    end
+                end
+            end
+
+            Stack[sp]=closure
+            sp=sp+1
+        elseif op==49 then halt=TRUE end
+
+        --similarly to how most instructions are grouped by which values they load, they are also grouped by if they store a value.
+        if op<18 or(op>30 and op<46) then
+            Stack[sp]=c
+            sp=sp+1
+        end
+
+        Frame[7]=pc
+
+        if halt then break end
+    end
+
+    if hasOnTick or hasOnDraw then
+        csp=2
+        if name=="" then
+            CallStack[0]=CopyFrame(Frame)
+        end
+    else
+        PrintStats()
+        EXIT()
+    end
+end
+
+--#endregion
+--#region * * * * VM Bytecode Stats * * * *
+
+function PrintStats()
+    if logInstructionFreq then OpFreq() end
+    if logCallFreq then CallFreq() end
+end
+
+function OpFreq()
+    local total = 0
+    local sortedFreqs={}
+    for i=0,#instructionStats do
+        total = total + instructionStats[i]
+        sortedFreqs[#sortedFreqs+1]={op=i, freq=instructionStats[i]}
+    end
+
+    table.sort(sortedFreqs, function(a, b) return a.freq > b.freq end)
+
+    print("* * * * Bytecode Op Frequency * * * *")
+    print("  #  Opcode                      Frequency  % Total")
+    for i=1,#sortedFreqs do
+        local op, freq = sortedFreqs[i].op, sortedFreqs[i].freq
+        print(PadLeft(i, 3).."  "..PadLeft("("..op..")", 4).." "..PadRight(opcodes[op], 16)..PadLeft(freq, 16).."   "..PadLeft(string.format("%.3f", (freq/total)*100), 6))
+    end
+end
+
+function CallFreq()
+    local total=0
+    local sortedFreqs={}
+    for k, v in pairs(callStats) do
+        total = total + v
+        sortedFreqs[#sortedFreqs+1]={func=k, freq=v}
+    end
+
+    table.sort(sortedFreqs, function(a, b) return a.freq > b.freq end)
+
+    print("* * * * Function Call Frequency * * * *")
+    print("  #  Function Name                    Frequency  % Total")
+    for i=1, #sortedFreqs do
+        local func, freq = sortedFreqs[i].func, sortedFreqs[i].freq
+
+        if func ~= "" then
+            print(PadLeft(i, 3).."  "..PadRight(func, 25).." "..PadLeft(freq, 16).."   "..PadLeft(string.format("%.3f", (freq/total)*100), 6))
+        end
+    end
+end
+
+function PadLeft(str, len)
+    str = tostring(str)
+    local spacesToAdd=len-#str
+    for i=1, spacesToAdd do
+        str = " "..str
+    end
+    return str
+end
+
+function PadRight(str, len)
+    str = tostring(str)
+    local spacesToAdd=len-#str
+    for i=1, spacesToAdd do
+        str = str.." "
+    end
+    return str
+end
+
+--#endregion
+--#region * * * * VM Debug/Error Functions * * * *
+
+function sws_Error(message)
+    local pc=Frame[7]-1
+
+    if hasDebugData then
+        local line=frameDebugData[Frame[1]][2][pc]
+        print("[RUNTIME ERROR] @ line:"..line.." (function:'"..Frame[1].."', pc:"..pc..", "..opcodes[(Frame[2][pc+1]>>18)]..") "..message)
+        print(sourceCode[line])
+        print("^")
+
+        stackTrace[#stackTrace+1] = {Frame[1], line}
+    else
+        print("[RUNTIME ERROR] (function:'"..Frame[1].."', pc:"..pc..", "..opcodes[(Frame[2][pc+1]>>18)]..") "..message)
+    end
+
+    print("\nStack trace:")
+    for i=#stackTrace, 1, -1 do
+        if stackTrace[i][1]=="" then
+            stackTrace[i][1]="main"
+        else
+            stackTrace[i][1]="function '"..stackTrace[i][1].."'"
+        end
+
+        if stackTrace[i][2]==-1 then
+            stackTrace[i][2]="n/a"
+        end
+        print(" at "..stackTrace[i][2].." in "..stackTrace[i][1].."")
+    end
+
+    print()
+
+    PrintStats()
+    EXIT()
+end
+
+--#endregion
+
+-- NOTE: pcall didn't seem to work in LifeBoatAPI, so you could use this instead:
+-- function onTick()Execute(TRUE)end
+-- function onDraw()Execute(FALSE)end
+
+function onTick()
+    local status, result = pcall(Execute, TRUE)
+    if not status then
+        sws_Error("ERROR RUNNING ONTICK()\n"..toStr(result))
+    end
+end
+
+function onDraw()
+    local status, result = pcall(Execute, FALSE)
+    if not status then
+        sws_Error("ERROR RUNNING ONDRAW()\n"..toStr(result))
+    end
+end

@@ -1,0 +1,76 @@
+SetColor, DrawLine = lua.screen.setColor, lua.screen.drawLine
+sin, cos = lua.math.sin, lua.math.cos
+
+screen_width, screen_height, R1, R2, K2 = 160, 160, 1, 2, 5
+K1 = screen_width*K2*3/(8*(R1+R2))
+
+;controls number of points on donut.
+local theta_spacing, phi_spacing = 0.3, 0.15
+
+a, b = 0, 0
+
+func RenderFrame(A, B) {
+    local cosA = cos(A)
+    local sinA = sin(A)
+    local cosB = cos(B)
+    local sinB = sin(B)
+
+    local output = {}
+    local zbuffer = {}
+
+    for theta=0, theta < 6.28, theta += theta_spacing {
+        local cosTheta = cos(theta)
+        local sinTheta = sin(theta)
+
+        for phi=0, phi < 6.28, phi += phi_spacing {
+            local cosPhi = cos(phi)
+            local sinPhi = sin(phi)
+
+            local L = cosPhi*cosTheta*sinB - cosA*cosTheta*sinPhi -sinA*sinTheta + cosB*(cosA*sinTheta - cosTheta*sinA*sinPhi)
+
+            if L>0 {
+                local circleX, circleY = R2 + R1 * cosTheta, R1 * sinTheta
+
+                local x = circleX*(cosB*cosPhi + sinA*sinB*sinPhi) - circleY*cosA*sinB
+                local y = circleX*(sinB*cosPhi - sinA*cosB*sinPhi) + circleY*cosA*cosB
+                local z = K2 + cosA*circleX*sinPhi + circleY*sinA
+
+                local ooz = 1/z
+
+                local xp = (screen_width/2 + K1*ooz*x)//1
+                local yp = (screen_height/2 - K1*ooz*y)//1
+                local xy = xp * screen_height + yp
+
+                if !zbuffer[xy] {
+                    zbuffer[xy] = 0
+                }
+
+                if ooz > zbuffer[xy] {
+                    zbuffer[xy] = ooz
+                    output[xy] = L * 181
+                }
+            }
+        }
+    }
+
+    return output
+}
+
+func onDraw() {
+    local frame = RenderFrame(a, b)
+    a += 0.07
+    b += 0.02
+
+    local coords = _keys(frame)
+
+    for i=1, i<=#coords {
+        local coord = coords[i]
+        local c = frame[coord]
+
+        local x, y = coord//screen_height, coord%screen_height
+
+        SetColor(c, c, c)
+
+        DrawLine(x, y, x, y + 1)
+    }
+}

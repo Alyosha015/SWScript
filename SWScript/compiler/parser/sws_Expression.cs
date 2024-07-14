@@ -4,9 +4,9 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-using static SWScript.compiler.sws_TokenType;
+using static SWS.Compiler.sws_TokenType;
 
-namespace SWScript.compiler {
+namespace SWS.Compiler {
     internal enum sws_ExpressionType {
         Unary, Binary, Literal, Variable, Table, TableGet, LuaCall, ClosureCall, Closure, SelfCall,
     }
@@ -60,6 +60,11 @@ namespace SWScript.compiler {
         public List<sws_Expression> Arguments;
 
         /// <summary>
+        /// Expected number of values function will return. May be set after parsing expression during statement parsing stage. (Ex. value would be 2 for statement 'a, b = doThing()')
+        /// </summary>
+        public int CallValuesReturned;
+
+        /// <summary>
         /// Parent object of sws_Expression
         /// </summary>
         public sws_Expression Parent;
@@ -81,6 +86,7 @@ namespace SWScript.compiler {
             Elements = expr.Elements;
             Indices = expr.Indices;
             Arguments = expr.Arguments;
+            CallValuesReturned = expr.CallValuesReturned;
             Parent = expr.Parent;
         }
 
@@ -241,11 +247,11 @@ namespace SWScript.compiler {
         public sws_Expression SelfCall(sws_Expression left, sws_Expression name, List<sws_Expression> arguments) {
             Type = sws_ExpressionType.SelfCall;
 
-            Right = name;
-            Right.Parent = this;
-
             Left = left;
             Left.Parent = this;
+
+            Right = name;
+            Right.Parent = this;
 
             Arguments = arguments;
             for (int i = 0; i < Arguments.Count; i++) {
@@ -268,7 +274,7 @@ namespace SWScript.compiler {
                 ValueType = result.Type;
 
                 return new sws_Expression().Literal(result.Value, result.Type);
-            } catch (sws_Error) {
+            } catch (sws_ParserError) {
                 return this;
             }
 
@@ -306,7 +312,7 @@ namespace SWScript.compiler {
                                 break;
                             }
                         default: {
-                                throw new sws_Error($"[CONSTANT FOLD] Unable to perform operation '{expr.Op}' on literal values.");
+                                throw new sws_ParserError($"[CONSTANT FOLD] Unable to perform operation '{expr.Op}' on literal values.");
                             }
                     }
 
@@ -536,7 +542,7 @@ namespace SWScript.compiler {
                                 break;
                             }
                         default: {
-                                throw new sws_Error($"[CONSTANT FOLD] Unable to perform operation '{expr.Op}' on literal values.");
+                                throw new sws_ParserError($"[CONSTANT FOLD] Unable to perform operation '{expr.Op}' on literal values.");
                             }
                     }
 
@@ -553,7 +559,7 @@ namespace SWScript.compiler {
                         return (double)value.Value;
                     }
 
-                    throw new sws_Error($"[CONSTANT FOLD] Expected '{value.Value}' to be a Double, instead got '{value.Type}'.");
+                    throw new sws_ParserError($"[CONSTANT FOLD] Expected '{value.Value}' to be a Double, instead got '{value.Type}'.");
                 }
 
                 long CheckIsInt64(sws_Expression_Literal value) {
@@ -561,7 +567,7 @@ namespace SWScript.compiler {
                         return Convert.ToInt64(value.Value);
                     }
 
-                    throw new sws_Error($"[CONSTANT FOLD] Expected '{value.Value}' to be an Integer (no decimal point).");
+                    throw new sws_ParserError($"[CONSTANT FOLD] Expected '{value.Value}' to be an Integer (no decimal point).");
                 }
 
                 bool CheckIsBool(sws_Expression_Literal value) {
@@ -569,7 +575,7 @@ namespace SWScript.compiler {
                         return (bool)value.Value;
                     }
 
-                    throw new sws_Error($"[CONSTANT FOLD] Expected '{value.Value}' to be a Bool, instead got '{value.Type}'.");
+                    throw new sws_ParserError($"[CONSTANT FOLD] Expected '{value.Value}' to be a Bool, instead got '{value.Type}'.");
                 }
 
                 string CheckIsString(sws_Expression_Literal value) {
@@ -577,7 +583,7 @@ namespace SWScript.compiler {
                         return value.Value.ToString();
                     }
 
-                    throw new sws_Error($"[CONSTANT FOLD] Expected '{value.Value}' to be a String, instead got '{value.Type}'.");
+                    throw new sws_ParserError($"[CONSTANT FOLD] Expected '{value.Value}' to be a String, instead got '{value.Type}'.");
                 }
             }
         }
@@ -598,6 +604,30 @@ namespace SWScript.compiler {
             }
         }
 
+        public bool CanTableBeConst() {
+            if(Elements.Count == 0) {
+                return false;
+            }
+
+            for (int i = 0; i < Elements.Count; i++) {
+                if (Elements[i].Type != sws_ExpressionType.Literal) {
+                    return false;
+                }
+            }
+
+            for (int i = 0; i < ElementIndices.Count; i++) {
+                if (ElementIndices[i].Type != sws_ExpressionType.Literal) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public bool IsType(sws_ExpressionType type) {
+            return Type == type;
+        }
+
         public void Print() {
             Console.WriteLine(ToString());
         }
@@ -605,7 +635,7 @@ namespace SWScript.compiler {
         public override string ToString() {
             switch (Type) {
                 case sws_ExpressionType.Literal:
-                    return Value.ToString();
+                    return (Value ?? "null").ToString();
                 case sws_ExpressionType.Variable:
                     return Name;
                 case sws_ExpressionType.Table: {
@@ -643,7 +673,13 @@ namespace SWScript.compiler {
                         return str;
                     }
                 case sws_ExpressionType.SelfCall: {
-                        string str = "N/A";
+                        string str = Left.ToString() + ":" + Right.ToString() + "(";
+                        for (int i = 0; i < Arguments.Count; i++) {
+                            str += Arguments[i].ToString() + (i + 1 != Arguments.Count ? ", " : ")");
+                        }
+                        if (Arguments.Count == 0) {
+                            str += ")";
+                        }
                         return str;
                     }
                 case sws_ExpressionType.Closure: {

@@ -1,0 +1,25 @@
+{
+  "name": "swscript-syntax-highlighting",
+  "displayName": "SWScript Syntax Highlighting",
+  "description": "Syntax Highlighting",
+  "version": "1.1.0",
+  "engines": {
+    "vscode": "^1.67.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "sws",
+      "aliases": ["SWScript", "swscript"],
+      "extensions": [".sws"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "sws",
+      "scopeName": "source.sws",
+      "path": "./syntaxes/swscript.tmLanguage.json"
+    }]
+  }
+}

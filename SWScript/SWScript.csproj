@@ -4,9 +4,9 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{FC3BEB66-0E20-4AE2-A728-5D6A1E143693}</ProjectGuid>
-    <OutputType>Exe</OutputType>
-    <RootNamespace>SWScript</RootNamespace>
+    <ProjectGuid>{13500C53-E33A-4CFB-8074-135EE154E69E}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>SWS</RootNamespace>
     <AssemblyName>SWScript</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
@@ -32,6 +32,28 @@
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
+  <PropertyGroup>
+    <StartupObject />
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <DebugSymbols>true</DebugSymbols>
+    <OutputPath>bin\x64\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DebugType>full</DebugType>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>7.3</LangVersion>
+    <ErrorReport>prompt</ErrorReport>
+    <Prefer32Bit>true</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <OutputPath>bin\x64\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <Optimize>true</Optimize>
+    <DebugType>pdbonly</DebugType>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>7.3</LangVersion>
+    <ErrorReport>prompt</ErrorReport>
+  </PropertyGroup>
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
@@ -43,30 +65,53 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="ANSIColor.cs" />
-    <Compile Include="cmd\Cmd.cs" />
-    <Compile Include="compiler\parser\sws_Expression.cs" />
-    <Compile Include="compiler\parser\sws_Frame.cs" />
-    <Compile Include="compiler\parser\sws_Op.cs" />
-    <Compile Include="compiler\parser\sws_Parser.cs" />
-    <Compile Include="compiler\parser\sws_Prg.cs" />
-    <Compile Include="compiler\parser\sws_Statement.cs" />
-    <Compile Include="compiler\parser\sws_Variable.cs" />
-    <Compile Include="compiler\sws_Compiler.cs" />
-    <Compile Include="compiler\sws_Error.cs" />
-    <Compile Include="compiler\tokenizer\sws_Token.cs" />
-    <Compile Include="compiler\tokenizer\sws_TokenizerFirstPass.cs" />
-    <Compile Include="compiler\tokenizer\sws_TokenizerSecondPass.cs" />
-    <Compile Include="Program.cs" />
+    <Compile Include="AnsiColor.cs" />
+    <Compile Include="Compiler\Parser\sws_Expression.cs" />
+    <Compile Include="Compiler\Parser\sws_Frame.cs" />
+    <Compile Include="Compiler\Parser\sws_Op.cs" />
+    <Compile Include="Compiler\Parser\sws_Parser.cs" />
+    <Compile Include="Compiler\Parser\sws_Statement.cs" />
+    <Compile Include="Compiler\Parser\sws_Table.cs" />
+    <Compile Include="Compiler\Parser\sws_Variable.cs" />
+    <Compile Include="Compiler\sws_Common.cs" />
+    <Compile Include="Compiler\sws_ParserError.cs" />
+    <Compile Include="Compiler\sws_TokenizerError.cs" />
+    <Compile Include="Compiler\sws_Warning.cs" />
+    <Compile Include="Compiler\Tokenizer\sws_Token.cs" />
+    <Compile Include="Compiler\Tokenizer\sws_TokenizerFirstPass.cs" />
+    <Compile Include="Compiler\Tokenizer\sws_TokenizerSecondPass.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="vm\sws_Frame.cs" />
-    <Compile Include="vm\sws_Table.cs" />
-    <Compile Include="vm\sws_Variable.cs" />
-    <Compile Include="vm\sws_VM.cs" />
-    <Compile Include="vm\sws_VMError.cs" />
+    <Compile Include="Properties\Resources.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DesignTime>True</DesignTime>
+      <DependentUpon>Resources.resx</DependentUpon>
+    </Compile>
+    <Compile Include="SWScript.cs" />
+    <Compile Include="sws_Program.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Properties\Resources.resx">
+      <Generator>ResXFileCodeGenerator</Generator>
+      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Resources\MinimizedVM.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\SWLuaSim\SWLuaSim.csproj">
+      <Project>{62b959fd-2a8b-4269-b966-ee12c88a8231}</Project>
+      <Name>SWLuaSim</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Resources\DebugVM.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Resources\FastVM.txt" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

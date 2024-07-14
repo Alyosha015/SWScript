@@ -4,11 +4,12 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace SWScript.compiler {
+namespace SWS.Compiler {
     internal enum sws_StatementType {
         Normal,
         IncDec,
         Call,
+        SelfCall,
     }
 
     internal class sws_Statement {

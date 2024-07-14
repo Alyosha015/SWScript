@@ -4,12 +4,12 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-using static SWScript.compiler.sws_TokenType;
+using static SWS.Compiler.sws_TokenType;
 
-namespace SWScript.compiler {
-    internal enum sws_TokenType {
+namespace SWS.Compiler {
+    public enum sws_TokenType {
         //keywords
-        keyword_import,
+        keyword_import, //doesn't do anything
         keyword_lua,
         keyword_if,
         keyword_else,
@@ -17,6 +17,10 @@ namespace SWScript.compiler {
         keyword_for,
         keyword_while,
         keyword_continue,
+        keyword_switch,
+        keyword_intswitch,
+        keyword_case,
+        keyword_default,
         keyword_break,
         keyword_func,
         keyword_return,
@@ -26,7 +30,8 @@ namespace SWScript.compiler {
         keyword_null,
         keyword_print,
         keyword_println,
-        //NOTE: _keys() and _type() are reserved functions, however not keywords
+        keyword_property, //@property
+        //NOTE: _keys() and _type() are reserved functions, however are not keywords
 
         //identifiers
         identifier,
@@ -51,6 +56,7 @@ namespace SWScript.compiler {
         operator_bitor_assign,          // |=
         operator_bitshiftleft_assign,   // <<=
         operator_bitshiftright_assign,  // >>=
+        operator_concat_assign,         // $=
 
         //number, bitwise, logical, and string operators
         operator_add,                   // +
@@ -116,10 +122,10 @@ namespace SWScript.compiler {
         punctuation_doubleplus,         // ++
         punctuation_doubleminus,        // --
 
-        ERROR,                          //used internally by tokenizer / parser
+        EOF,                            //'END OF FILE', used internally by tokenizer / parser
     }
 
-    internal class sws_Token {
+    public class sws_Token {
         public static readonly sws_TokenType[] AssignmentOperators = {
             operator_assign,                // =
             operator_add_assign,            // +=
@@ -136,6 +142,7 @@ namespace SWScript.compiler {
             operator_bitor_assign,          // |=
             operator_bitshiftleft_assign,   // <<=
             operator_bitshiftright_assign,  // >>=
+            operator_concat_assign,         // $=
         };
 
         public sws_TokenType TokenType;
@@ -158,11 +165,11 @@ namespace SWScript.compiler {
         }
 
         public static sws_Token Error() {
-            return new sws_Token(ERROR, -1, -1);
+            return new sws_Token(EOF, -1, -1);
         }
 
         public static sws_Token Error(sws_Token last) {
-            return new sws_Token(ERROR, last.NLine, last.NColumn);
+            return new sws_Token(EOF, last.NLine, last.NColumn);
         }
 
         public bool IsAssignmentOperator() {

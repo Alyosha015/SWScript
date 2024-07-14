@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace SWScript {
+namespace SWS {
     internal enum FG {
         Black = 30,
         Red = 31,
@@ -44,42 +44,20 @@ namespace SWScript {
         BrightWhite = 107,
     }
 
-    internal class ANSIColor {
-        public static readonly string ResetWriteColor = "\x1B[0m";
+    internal class AnsiColor {
+        /// <summary>
+        /// If enable is false empty strings are returned instead of the control characters.
+        /// </summary>
+        public static bool Enable;
+
+        public static string ResetWriteColor => Enable ? "\x1B[0m" : string.Empty;
 
         public static string Color(FG fg, BG bg) {
-            return $"\x1B[{(int)fg};{(int)bg}m";
+            return Enable ? $"\x1B[{(int)fg};{(int)bg}m" : string.Empty;
         }
 
         public static string Color(FG fg) {
-            return $"\x1B[{(int)fg}m";
-        }
-
-        const int STD_OUTPUT_HANDLE = -11;
-        const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        static extern IntPtr GetStdHandle(int nStdHandle);
-
-        [DllImport("kernel32.dll")]
-        static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
-
-        [DllImport("kernel32.dll")]
-        static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
-
-        /// <summary>
-        /// Use to enable using ANSI color codes in console.
-        /// </summary>
-        public static void EnableANSIInConsole() {
-
-            IntPtr hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-
-            if (hConsole != IntPtr.Zero) {
-                if (GetConsoleMode(hConsole, out uint mode)) {
-                    mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-                    SetConsoleMode(hConsole, mode);
-                }
-            }
+            return Enable ? $"\x1B[{(int)fg}m" : string.Empty;
         }
     }
 }
