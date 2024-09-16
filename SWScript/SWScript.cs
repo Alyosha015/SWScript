@@ -243,7 +243,7 @@ namespace SWS {
                 }
             }
 
-            StormworksLuaSim luaSim = new StormworksLuaSim(Print, PrintLn, vm, propertyTexts, propertyNumbers, Program.PropertyBools, Math.Max(w * 32, 32), Math.Max(h * 32, 32));
+            StormworksLuaSim luaSim = new StormworksLuaSim(Print, PrintLn, vm, Program.StackFrames.ContainsKey("onTick") || Program.StackFrames.ContainsKey("onDraw"), propertyTexts, propertyNumbers, Program.PropertyBools, Math.Max(w * 32, 32), Math.Max(h * 32, 32));
 
             AnsiColor.Enable = true;
         }

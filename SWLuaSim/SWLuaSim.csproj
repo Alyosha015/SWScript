@@ -73,7 +73,6 @@
   <ItemGroup>
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="StormworksLuaSim.cs" />
-    <Compile Include="Util.cs" />
     <Compile Include="SDL_Window.cs" />
   </ItemGroup>
   <ItemGroup>

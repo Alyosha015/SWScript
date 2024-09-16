@@ -31,6 +31,7 @@ namespace SWLuaSim {
         private LuaFunction _sws_Error;
         private LuaFunction _printStats;
         private FunctionRunning _funcRunning;
+        private bool _hasOnTickOrOnDraw;
         private bool _swsExit;
 
         private Dictionary<string, string> _propertyTexts;
@@ -40,9 +41,10 @@ namespace SWLuaSim {
         private double[] InputNumbers;
         private bool[] InputBools;
 
-        public StormworksLuaSim(Action<string> print, Action<string> println, string program, Dictionary<string, string> propertyTexts, Dictionary<string, double> propertyNumbers, Dictionary<string, bool> propertyBools, int width, int height) {
+        public StormworksLuaSim(Action<string> print, Action<string> println, string program, bool hasOnTickOrOnDraw, Dictionary<string, string> propertyTexts, Dictionary<string, double> propertyNumbers, Dictionary<string, bool> propertyBools, int width, int height) {
             _print = print;
             _println = println;
+            _hasOnTickOrOnDraw = hasOnTickOrOnDraw;
 
             _size = new Size(width, height);
 
@@ -78,7 +80,7 @@ namespace SWLuaSim {
                 _printStats = _lua.GetFunction("PrintStats");
             }
 
-            _window = new SDL_Window(_size);
+            _window = new SDL_Window(_size, _hasOnTickOrOnDraw);
             _window.OnUpdate += Update;
             _window.OnClose += OnWindowClose;
             _window.Run();
@@ -135,6 +137,8 @@ namespace SWLuaSim {
 
 
         private void Update(object o, EventArgs e) {
+            if (_swsExit) return;
+
             double KeyPair(SDL.SDL_Keycode a, SDL.SDL_Keycode b) {
                 bool aPressed = _window.PressedKeys[a];
                 bool bPressed = _window.PressedKeys[b];
@@ -168,12 +172,13 @@ namespace SWLuaSim {
             double onTickTime = 0, onDrawTime = 0;
 
             _updateStopwatch.Restart();
-            
+
             _funcRunning = FunctionRunning.OnTick;
             _onTick?.Call();
             onTickTime = _updateStopwatch.Elapsed.TotalMilliseconds;
-            _updateStopwatch.Restart();
             
+            _updateStopwatch.Restart();
+
             _funcRunning = FunctionRunning.OnDraw;
             _onDraw?.Call();
             onDrawTime = _updateStopwatch.Elapsed.TotalMilliseconds;
@@ -213,6 +218,11 @@ namespace SWLuaSim {
         private void EXIT(params object[] parameters) {
             _swsExit = true;
             _window.Freeze();
+
+            //no onTick / onDraw, don't keep window open
+            if (!_hasOnTickOrOnDraw) {
+                _window.Close();
+            }
         }
 
         private void CheckIfOnTick(string funcName) {

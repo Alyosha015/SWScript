@@ -17,7 +17,7 @@ namespace SWScriptCommandLine {
  _\#\ |#|/#|/#/\ \/ __/ __/ / _ \/ __/   / / / // // /
 /###/ |##/|##/___/\__/_/ /_/ .__/\__/   /_(_)_(_)___/
                           /_/
-Compiler & VM                                v2024.07.12
+Compiler & VM                                v2024.09.15
 ********************************************************
 
 Type 'help' for a list of commands.";
@@ -36,7 +36,7 @@ sws <path> [-<options>]     - compiles program at <path> with options [-<options
    -bytecode -b             - prints bytecode of compiled program.
    -export -e               - exports program to Stormworks as a vehicle file.
    -lbexport -lbe           - exports program as property set commands for LifeBoatAPI.
-   -debug -db               - used with -lbexport, add data used for debuging VM to program.
+   -debug -db               - used with -lbexport, add data used for debugging VM to program.
    -vm=<path>               - used with -run and -export, contents of file are used as vm instead of default.";
 
         private static SWScript swscript;

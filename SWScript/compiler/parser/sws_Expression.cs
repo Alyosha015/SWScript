@@ -433,8 +433,8 @@ namespace SWS.Compiler {
                                 break;
                             }
                         case operator_concat: {
-                                string a = left.ToString();
-                                string b = right.ToString();
+                                string a = left.Value.ToString();
+                                string b = right.Value.ToString();
 
                                 output.Type = sws_DataType.String;
 

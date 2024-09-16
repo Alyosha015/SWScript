@@ -41,7 +41,9 @@ namespace SWLuaSim {
         private uint[] _screenData;
         private uint[] _blankScreen;
 
+        private bool _run;
         private bool _freeze;
+        private bool _show;
 
         private uint Color(byte r, byte g, byte b, byte a) {
             return (uint)(r + (g << 8) + (b << 16) + (a << 24));
@@ -63,8 +65,9 @@ namespace SWLuaSim {
             return (byte)((color >> 24) & 0xFF);
         }
 
-        public SDL_Window(Size resolution) {
+        public SDL_Window(Size resolution, bool show) {
             Resolution = resolution;
+            _show = show;
 
             PressedKeys = new Dictionary<SDL.SDL_Keycode, bool>();
             SDL.SDL_Keycode[] keycodes = (SDL.SDL_Keycode[])Enum.GetValues(typeof(SDL.SDL_Keycode));
@@ -83,44 +86,46 @@ namespace SWLuaSim {
         public void Run() {
             SDL.SDL_Init(SDL.SDL_INIT_VIDEO);
 
-            Window = SDL.SDL_CreateWindow("Stormworks Lua Simulator (ESC to close)", SDL.SDL_WINDOWPOS_UNDEFINED, SDL.SDL_WINDOWPOS_UNDEFINED, 800, 480, SDL.SDL_WindowFlags.SDL_WINDOW_RESIZABLE | SDL.SDL_WindowFlags.SDL_WINDOW_SHOWN | SDL.SDL_WindowFlags.SDL_WINDOW_ALLOW_HIGHDPI);
+            SDL.SDL_WindowFlags flags = SDL.SDL_WindowFlags.SDL_WINDOW_RESIZABLE | SDL.SDL_WindowFlags.SDL_WINDOW_SHOWN | SDL.SDL_WindowFlags.SDL_WINDOW_ALLOW_HIGHDPI;
+
+            Window = SDL.SDL_CreateWindow("Stormworks Lua Simulator (ESC to close)", SDL.SDL_WINDOWPOS_UNDEFINED, SDL.SDL_WINDOWPOS_UNDEFINED, 800, 480, _show ? flags : SDL.SDL_WindowFlags.SDL_WINDOW_HIDDEN);
 
             Renderer = SDL.SDL_CreateRenderer(Window, -1, SDL.SDL_RendererFlags.SDL_RENDERER_SOFTWARE);
 
             Texture = SDL.SDL_CreateTexture(Renderer, SDL.SDL_PIXELFORMAT_ARGB8888, (int)SDL.SDL_TextureAccess.SDL_TEXTUREACCESS_TARGET, Resolution.Width, Resolution.Height);
 
-            SDL.SDL_RaiseWindow(Window);
+            if (_show) SDL.SDL_RaiseWindow(Window);
 
-            bool run = true;
+            _run = true;
 
             Stopwatch ticks = Stopwatch.StartNew();
 
-            while (run) {
-                SDL.SDL_PollEvent(out SDL.SDL_Event e);
-
-                switch(e.type) {
-                    case SDL.SDL_EventType.SDL_QUIT: {
-                            OnClose?.Invoke(this, EventArgs.Empty);
-                            run = false;
-                            break;
-                        }
-                    case SDL.SDL_EventType.SDL_KEYDOWN: {
-                            SDL.SDL_Keycode keyCode = e.key.keysym.sym;
-
-                            PressedKeys[keyCode] = true;
-
-                            if (keyCode == SDL.SDL_Keycode.SDLK_ESCAPE) {
+            while (_run) {
+                while(SDL.SDL_PollEvent(out SDL.SDL_Event e) > 0) {
+                    switch (e.type) {
+                        case SDL.SDL_EventType.SDL_QUIT: {
                                 OnClose?.Invoke(this, EventArgs.Empty);
-                                run = false;
+                                _run = false;
+                                break;
                             }
-                            break;
-                        }
-                    case SDL.SDL_EventType.SDL_KEYUP: {
-                            SDL.SDL_Keycode keyCode = e.key.keysym.sym;
+                        case SDL.SDL_EventType.SDL_KEYDOWN: {
+                                SDL.SDL_Keycode keyCode = e.key.keysym.sym;
 
-                            PressedKeys[keyCode] = false;
-                            break;
-                        }
+                                PressedKeys[keyCode] = true;
+
+                                if (keyCode == SDL.SDL_Keycode.SDLK_ESCAPE) {
+                                    OnClose?.Invoke(this, EventArgs.Empty);
+                                    _run = false;
+                                }
+                                break;
+                            }
+                        case SDL.SDL_EventType.SDL_KEYUP: {
+                                SDL.SDL_Keycode keyCode = e.key.keysym.sym;
+
+                                PressedKeys[keyCode] = false;
+                                break;
+                            }
+                    }
                 }
 
                 if(ticks.Elapsed.TotalMilliseconds > 16.666 && !_freeze && !_onUpdateThreadRunning) {
@@ -134,76 +139,83 @@ namespace SWLuaSim {
                 Thread.Sleep(1);
             }
 
-            SDL.SDL_DestroyTexture(Texture);
-            SDL.SDL_DestroyRenderer(Renderer);
-            SDL.SDL_DestroyWindow(Window);
-            SDL.SDL_Quit();
+            Close();
         }
 
         private void Update() {
             OnUpdate?.Invoke(this, EventArgs.Empty);
 
-            SDL.SDL_SetRenderTarget(Renderer, Texture);
-            SDL.SDL_SetRenderDrawColor(Renderer, 0, 0, 0, 255);
-            SDL.SDL_RenderClear(Renderer);
+            if (_show) {
+                SDL.SDL_SetRenderTarget(Renderer, Texture);
+                SDL.SDL_SetRenderDrawColor(Renderer, 0, 0, 0, 255);
+                SDL.SDL_RenderClear(Renderer);
 
-            uint lastColor = 0;
+                uint lastColor = 0;
 
-            for (int yy = 0; yy < Resolution.Height; yy++) {
-                for (int xx = 0; xx < Resolution.Width; xx++) {
-                    uint color = _screenData[yy * Resolution.Width + xx];
+                for (int yy = 0; yy < Resolution.Height; yy++) {
+                    for (int xx = 0; xx < Resolution.Width; xx++) {
+                        uint color = _screenData[yy * Resolution.Width + xx];
 
-                    if (color != lastColor) {
-                        SDL.SDL_SetRenderDrawColor(Renderer, ColorR(color), ColorG(color), ColorB(color), 255);
+                        if (color != lastColor) {
+                            SDL.SDL_SetRenderDrawColor(Renderer, ColorR(color), ColorG(color), ColorB(color), 255);
+                        }
+
+                        SDL.SDL_RenderDrawPoint(Renderer, xx, yy);
+
+                        lastColor = color;
                     }
-
-                    SDL.SDL_RenderDrawPoint(Renderer, xx, yy);
-
-                    lastColor = color;
                 }
+
+                SDL.SDL_GetWindowSize(Window, out int windowW, out int windowH);
+
+                float windowWidth = windowW;
+                float windowHeight = windowH;
+                float outputWidth = Resolution.Width;
+                float outputHeight = Resolution.Height;
+
+                float windowAspect = windowWidth / windowHeight;
+                float outputAspect = outputWidth / outputHeight;
+
+                float x = 0, y = 0, width = windowHeight * outputAspect, height = width / outputAspect;
+
+                if (windowAspect > outputAspect) {
+                    width = windowHeight * outputAspect;
+                    height = width / outputAspect;
+                    x = (windowWidth - width) / 2;
+                } else if (windowAspect < outputAspect) {
+                    height = windowWidth / outputAspect;
+                    width = height * outputAspect;
+                    y = (windowHeight - height) / 2;
+                }
+
+                SDL.SDL_Rect rect;
+                rect.x = (int)x;
+                rect.y = (int)y;
+                rect.w = (int)width;
+                rect.h = (int)height;
+
+                SDL.SDL_SetRenderTarget(Renderer, IntPtr.Zero);
+                SDL.SDL_SetRenderDrawColor(Renderer, 20, 20, 25, 255);
+                SDL.SDL_RenderClear(Renderer);
+                SDL.SDL_RenderCopy(Renderer, Texture, IntPtr.Zero, ref rect);
+                SDL.SDL_RenderPresent(Renderer);
+
+                Array.Copy(_blankScreen, _screenData, _blankScreen.Length);
             }
-
-            SDL.SDL_GetWindowSize(Window, out int windowW, out int windowH);
-
-            float windowWidth = windowW;
-            float windowHeight = windowH;
-            float outputWidth = Resolution.Width;
-            float outputHeight = Resolution.Height;
-
-            float windowAspect = windowWidth / windowHeight;
-            float outputAspect = outputWidth / outputHeight;
-
-            float x = 0, y = 0, width = windowHeight * outputAspect, height = width / outputAspect;
-
-            if (windowAspect > outputAspect) {
-                width = windowHeight * outputAspect;
-                height = width / outputAspect;
-                x = (windowWidth - width) / 2;
-            } else if (windowAspect < outputAspect) {
-                height = windowWidth / outputAspect;
-                width = height * outputAspect;
-                y = (windowHeight - height) / 2;
-            }
-
-            SDL.SDL_Rect rect;
-            rect.x = (int)x;
-            rect.y = (int)y;
-            rect.w = (int)width;
-            rect.h = (int)height;
-
-            SDL.SDL_SetRenderTarget(Renderer, IntPtr.Zero);
-            SDL.SDL_SetRenderDrawColor(Renderer, 20, 20, 25, 255);
-            SDL.SDL_RenderClear(Renderer);
-            SDL.SDL_RenderCopy(Renderer, Texture, IntPtr.Zero, ref rect);
-            SDL.SDL_RenderPresent(Renderer);
-
-            Array.Copy(_blankScreen, _screenData, _blankScreen.Length);
 
             _onUpdateThreadRunning = false;
         }
 
         public void SetTitle(string title) {
             SDL.SDL_SetWindowTitle(Window, title);
+        }
+
+        public void Close() {
+            SDL.SDL_DestroyTexture(Texture);
+            SDL.SDL_DestroyRenderer(Renderer);
+            SDL.SDL_DestroyWindow(Window);
+
+            _run = false;
         }
 
         public void Pixel(int x, int y) {
